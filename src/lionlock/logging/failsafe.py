@@ -5,10 +5,14 @@ from typing import Any, Dict, Tuple
 
 from . import sql_telemetry
 
+Fernet: Any | None
+
 try:
-    from cryptography.fernet import Fernet  # type: ignore
+    from cryptography.fernet import Fernet as _CryptFernet
 except Exception:
-    Fernet = None  # type: ignore[assignment]
+    Fernet = None
+else:
+    Fernet = _CryptFernet
 
 
 def _serialize(payload: Dict[str, Any]) -> bytes:

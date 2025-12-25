@@ -9,7 +9,7 @@ from typing import Any, Dict
 try:
     import tomllib  # py>=3.11
 except ModuleNotFoundError:  # pragma: no cover - fallback for older runtimes
-    import tomli as tomllib  # type: ignore[no-redef]
+    import tomli as tomllib
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "llm": {

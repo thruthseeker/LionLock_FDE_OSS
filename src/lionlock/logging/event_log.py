@@ -159,7 +159,7 @@ def build_connector_error_event(
     config_hash: str,
     notes: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    event = {
+    event: Dict[str, Any] = {
         "timestamp_utc": timestamp_utc,
         "request_id": request_id,
         "base_url": base_url,

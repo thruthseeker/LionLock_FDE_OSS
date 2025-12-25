@@ -38,7 +38,7 @@ def severity_band(aggregate_score: float, thresholds: Dict[str, float] | None = 
 
 def _top_reason_code(scores: SignalScores) -> str:
     signal_map = scores.as_dict()
-    top_signal = max(signal_map, key=signal_map.get)
+    top_signal = max(signal_map, key=signal_map.__getitem__)
     return REASON_CODE_MAP.get(top_signal, "policy_violation")
 
 

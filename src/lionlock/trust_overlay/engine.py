@@ -132,8 +132,10 @@ def detect_drift(
     scores = list(score_history)
     ts_list = list(timestamps)
     if ts_list and len(ts_list) == len(scores):
-        parsed = [(_parse_timestamp(ts), score) for ts, score in zip(ts_list, scores)]
-        parsed = [(ts, score) for ts, score in parsed if ts is not None]
+        parsed_pairs = [(_parse_timestamp(ts), score) for ts, score in zip(ts_list, scores)]
+        parsed: list[tuple[datetime, float]] = [
+            (ts, score) for ts, score in parsed_pairs if ts is not None
+        ]
         if parsed:
             latest = parsed[-1][0]
             cutoff = latest - timedelta(days=int(lookback_days or DEFAULTS["drift_lookback_days"]))
@@ -201,7 +203,12 @@ def assign_badge(score: float, volatility: float, drift: dict[str, Any]) -> str:
     return "STABLE"
 
 
-def trigger_flags(score: float, volatility: float, drift: dict[str, Any], profile: str | None) -> list[str]:
+def trigger_flags(
+    score: float,
+    volatility: float,
+    drift: dict[str, Any],
+    profile: str | None,
+) -> list[str]:
     flags: list[str] = []
     label = map_label(score, profile=profile)
     if label in {"AT_RISK", "UNTRUSTED"}:

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
 try:
-    from sqlalchemy import create_engine, text  # type: ignore
+    from sqlalchemy import create_engine, text
 except Exception:
     create_engine = None  # type: ignore[assignment]
     text = None  # type: ignore[assignment]
@@ -263,7 +263,7 @@ class SQLTelemetryWriter:
         self.available = True
         self.error: str | None = None
         self.sqlite_path = _sqlite_path_from_uri(uri)
-        self.engine = None
+        self.engine: Any = None
 
         if self.sqlite_path is None and (create_engine is None or text is None):
             self.available = False
@@ -353,10 +353,10 @@ class SQLTelemetryWriter:
                     name for name, _ in PUBLIC_SIGNALS_COLUMNS if name != "event_pk"
                 )
                 values = ",".join(f":{name}" for name in columns.split(","))
-                sql = text(f"INSERT INTO {self.table} ({columns}) VALUES ({values})")
+                stmt = text(f"INSERT INTO {self.table} ({columns}) VALUES ({values})")
                 with self.engine.begin() as conn:
                     conn.execute(
-                        sql,
+                        stmt,
                         [
                             _event_to_named_row(event, event.get("session_pk"))
                             for event in buffer
@@ -594,15 +594,17 @@ def write_failsafe_blob(
                 sqlite_path,
                 timeout=int(config.get("connect_timeout_s", 5)),
             ) as conn:
-                sql = f"INSERT INTO {table} (timestamp_utc,request_id,payload_b64) VALUES (?,?,?)"
-                conn.execute(sql, (timestamp_utc, request_id, payload_b64))
+                sql_stmt = (
+                    f"INSERT INTO {table} (timestamp_utc,request_id,payload_b64) VALUES (?,?,?)"
+                )
+                conn.execute(sql_stmt, (timestamp_utc, request_id, payload_b64))
                 conn.commit()
             return True, "Failsafe SQL insert ok."
         if create_engine is None or text is None:
             return False, "SQLAlchemy not installed; cannot write failsafe SQL."
         _init_sqlalchemy_table(uri, table, FAILSAFE_COLUMNS)
         engine = create_engine(uri)
-        sql = text(
+        sql_text = text(
             (
                 f"INSERT INTO {table} (timestamp_utc,request_id,payload_b64) "
                 "VALUES (:timestamp_utc,:request_id,:payload_b64)"
@@ -610,7 +612,7 @@ def write_failsafe_blob(
         )
         with engine.begin() as conn:
             conn.execute(
-                sql,
+                sql_text,
                 {
                     "timestamp_utc": timestamp_utc,
                     "request_id": request_id,

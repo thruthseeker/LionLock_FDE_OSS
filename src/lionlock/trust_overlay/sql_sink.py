@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
 try:
-    from sqlalchemy import create_engine, text  # type: ignore
+    from sqlalchemy import create_engine, text
 except Exception:
     create_engine = None  # type: ignore[assignment]
     text = None  # type: ignore[assignment]
@@ -202,7 +202,7 @@ class TrustOverlaySQLWriter:
         self.stop_event = threading.Event()
         self.available = True
         self.error: str | None = None
-        self.engine = None
+        self.engine: Any = None
 
         if self.backend == "sqlite3":
             if not self.sqlite_path:
@@ -227,6 +227,7 @@ class TrustOverlaySQLWriter:
     def _init_tables(self) -> None:
         try:
             if self.backend == "sqlite3":
+                assert self.sqlite_path is not None
                 _init_sqlite_table(self.sqlite_path, self.table, TRUST_OVERLAY_COLUMNS)
             else:
                 if create_engine is None or text is None:
@@ -281,6 +282,7 @@ class TrustOverlaySQLWriter:
         try:
             columns = ",".join(name for name, _ in TRUST_OVERLAY_COLUMNS)
             if self.backend == "sqlite3":
+                assert self.sqlite_path is not None
                 placeholders = ",".join("?" for _ in TRUST_OVERLAY_COLUMNS)
                 sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders})"
                 with sqlite3.connect(
@@ -295,10 +297,10 @@ class TrustOverlaySQLWriter:
                 if self.engine is None or text is None:
                     raise RuntimeError("SQLAlchemy not installed.")
                 values = ",".join(f":{name}" for name, _ in TRUST_OVERLAY_COLUMNS)
-                sql = text(f"INSERT INTO {self.table} ({columns}) VALUES ({values})")
+                stmt = text(f"INSERT INTO {self.table} ({columns}) VALUES ({values})")
                 with self.engine.begin() as conn:
                     conn.execute(
-                        sql,
+                        stmt,
                         [_record_to_named_row(record) for record in buffer],
                     )
         except Exception as exc:

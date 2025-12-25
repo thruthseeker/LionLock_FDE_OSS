@@ -8,7 +8,7 @@ import platform
 import socket
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Iterable, cast
 
 from lionlock.versioning import get_lionlock_version
 
@@ -198,7 +198,7 @@ def build_trust_record(
     if salt and user_id:
         pseudonymous_key = pseudonymous_user_key(user_id, salt)
 
-    trust_logic_version = overlay_cfg.get("trust_logic_version")
+    trust_logic_version = cast(str, overlay_cfg.get("trust_logic_version"))
     fingerprint = code_fingerprint()
     runtime_mode = resolve_runtime_mode(config)
 

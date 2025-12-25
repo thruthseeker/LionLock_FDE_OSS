@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
 try:
-    from sqlalchemy import create_engine, text  # type: ignore
+    from sqlalchemy import create_engine, text
 except Exception:
     create_engine = None  # type: ignore[assignment]
     text = None  # type: ignore[assignment]
