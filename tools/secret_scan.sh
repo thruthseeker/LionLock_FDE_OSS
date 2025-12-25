@@ -12,20 +12,20 @@ PATTERNS=(
 )
 
 EXCLUDE_DIRS=(
-  "./.git"
-  "./.venv"
-  "./__pycache__"
-  "./logs"
-  "./_split"
-  "./_split_v2"
-  "./archive"
-  "./repos"
-  "./.history"
+  ".git"
+  ".venv"
+  "__pycache__"
+  "logs"
+  "_split"
+  "_split_v2"
+  "archive"
+  "repos"
+  ".history"
 )
 
 FIND_EXCLUDES=()
 for d in "${EXCLUDE_DIRS[@]}"; do
-  FIND_EXCLUDES+=( -path "$d" -prune -o )
+  FIND_EXCLUDES+=( -type d -name "$d" -prune -o )
 done
 
 while IFS= read -r -d '' file; do
