@@ -58,3 +58,26 @@ docker-compose.yml
 config.toml
 lionlock.toml
 docker-compose.yml
+
+# --- Secrets / local runtime (never commit) ---
+config.toml
+lionlock.toml
+docker-compose.yml
+.env
+.env.*
+
+# --- Local logs / telemetry artifacts (never commit) ---
+logs/
+*.db
+*.sqlite
+*.sqlite3
+*.jsonl
+*.encjsonl
+
+# --- Workspace/private notes (default: do not commit) ---
+context/
+
+# --- Common key/cert formats (never commit) ---
+*.key
+*.pem
+*.p12
