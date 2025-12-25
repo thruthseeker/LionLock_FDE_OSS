@@ -112,3 +112,11 @@ _split_v2/
 archive/
 repos/
 logs/
+
+# --- Open-core hygiene: do not ship split artifacts / workspace byproducts ---
+_split/
+_split_v2/
+.history/
+archive/
+repos/
+logs/

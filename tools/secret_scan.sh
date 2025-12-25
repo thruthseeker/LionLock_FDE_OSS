@@ -11,7 +11,6 @@ PATTERNS=(
   "Authorization: Bearer"
 )
 
-# Directories we do NOT scan (noise + open-core hygiene + local artifacts)
 EXCLUDE_DIRS=(
   "./.git"
   "./.venv"
@@ -24,13 +23,11 @@ EXCLUDE_DIRS=(
   "./.history"
 )
 
-# Build find exclusions
 FIND_EXCLUDES=()
 for d in "${EXCLUDE_DIRS[@]}"; do
   FIND_EXCLUDES+=( -path "$d" -prune -o )
 done
 
-# Scan all files except secret_scan.sh (prevents self-trigger, even if copied)
 while IFS= read -r -d '' file; do
   for pat in "${PATTERNS[@]}"; do
     if grep -nH --fixed-strings "$pat" "$file" >/dev/null 2>&1; then
