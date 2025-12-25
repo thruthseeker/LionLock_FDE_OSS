@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-
-cd "$ROOT_DIR"
-
 echo "Scanning for potential secrets..."
 
-patterns=(
+PATTERNS=(
   "BEGIN PRIVATE KEY"
   "AWS_SECRET_ACCESS_KEY"
   "api_key="
@@ -15,20 +11,38 @@ patterns=(
   "Authorization: Bearer"
 )
 
-find . -type f \
-  ! -path "./.git/*" \
-  ! -path "./archive/experimental/*" \
-  ! -path "./.venv/*" \
-  ! -path "./.pytest_cache/*" \
-  ! -path "./build/*" \
-  ! -path "./dist/*" \
-  ! -path "./tools/secret_scan.sh" \
-  | while read -r file; do
-    for pat in "${patterns[@]}"; do
-      if LC_ALL=C grep -Hn --binary-files=without-match -F "$pat" "$file" >/dev/null; then
-        echo "Potential secret match: $file ($pat)"
-      fi
-    done
+# Directories we do NOT scan (noise + open-core hygiene + local artifacts)
+EXCLUDE_DIRS=(
+  "./.git"
+  "./.venv"
+  "./__pycache__"
+  "./logs"
+  "./_split"
+  "./_split_v2"
+  "./archive"
+  "./repos"
+  "./.history"
+)
+
+# Build find exclusions
+FIND_EXCLUDES=()
+for d in "${EXCLUDE_DIRS[@]}"; do
+  FIND_EXCLUDES+=( -path "$d" -prune -o )
+done
+
+# Scan all files except secret_scan.sh (prevents self-trigger, even if copied)
+while IFS= read -r -d '' file; do
+  for pat in "${PATTERNS[@]}"; do
+    if grep -nH --fixed-strings "$pat" "$file" >/dev/null 2>&1; then
+      echo "Potential secret match: $file ($pat)"
+    fi
   done
+done < <(
+  find . \
+    "${FIND_EXCLUDES[@]}" \
+    -type f \
+    ! -name "secret_scan.sh" \
+    -print0
+)
 
 echo "Secret scan completed."
