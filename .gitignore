@@ -81,3 +81,10 @@ context/
 *.key
 *.pem
 *.p12
+
+# --- Open-core hygiene: never ship split artifacts ---
+_split/
+_split_v2/
+.history/
+archive/
+repos/
