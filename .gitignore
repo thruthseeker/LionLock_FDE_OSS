@@ -1,0 +1,50 @@
+# Local trust logs (keep private)
+logs/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Secret config files (never track)
+.env
+config/*secrets*.json
+config/*local*.json
+
+# Private or premium folders (open-core boundary)
+backend/
+frontend/
+web/
+project_lockdown/
+ui/
+
+# Python cache and IDE files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.vscode/
+.idea/
+
+# Test coverage and dev junk
+.coverage
+htmlcov/
+.cache/
+
+# Old file backups or snapshots
+.history/
+
+# Repo-local artifacts / scratch (do not publish)
+.snapshots/
+.history/
+archive/
+repos/
+_split/
+_split_v2/
+apps/
+
+# Backups / exports / large binaries
+*.zip
+*.bak.*
+*.code-workspace
+.gitignore_patch_suggestions.txt
