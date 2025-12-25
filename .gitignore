@@ -48,3 +48,8 @@ apps/
 *.bak.*
 *.code-workspace
 .gitignore_patch_suggestions.txt
+
+# Local configs (do not commit)
+config.toml
+lionlock.toml
+docker-compose.yml
