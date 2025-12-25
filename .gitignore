@@ -53,3 +53,8 @@ apps/
 config.toml
 lionlock.toml
 docker-compose.yml
+
+# Local runtime configs (never commit)
+config.toml
+lionlock.toml
+docker-compose.yml
