@@ -1,14 +1,16 @@
 """Core scoring and gating helpers for the LionLock demo."""
 
 from .gating import DEFAULT_HARD_GATE_REASONS, DEFAULT_THRESHOLDS, decide_gate, severity_band
-from .models import GateDecision, SignalScores
+from .models import DerivedSignals, GateDecision, SignalBundle, SignalScores
 from .scoring import DEFAULT_SIGNAL_WEIGHTS, aggregate_score, score_response
 
 __all__ = [
     "DEFAULT_HARD_GATE_REASONS",
     "DEFAULT_SIGNAL_WEIGHTS",
+    "DerivedSignals",
     "DEFAULT_THRESHOLDS",
     "GateDecision",
+    "SignalBundle",
     "SignalScores",
     "aggregate_score",
     "decide_gate",
