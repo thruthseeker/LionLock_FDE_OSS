@@ -6,6 +6,7 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict
 
+from lionlock.logging.connection import build_postgres_dsn
 try:
     import tomllib  # py>=3.11
 except ModuleNotFoundError:  # pragma: no cover - fallback for older runtimes
@@ -93,6 +94,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "batch_size": 50,
         "flush_interval_ms": 1000,
         "connect_timeout_s": 5,
+        "token_auth": {
+            "enabled": False,
+            "mode": "required",
+            "required": False,
+            "token_env": "LIONLOCK_LOG_TOKEN",
+            "token_path": "",
+            "token_hashes": [],
+            "token_hashes_path": "",
+            "token_db_uri": "",
+            "refresh_interval_s": 60,
+        },
     },
     "failsafe": {
         "enabled": False,
@@ -112,6 +124,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "repeat_type_threshold": 3,
         "fatigue_spike_delta": 0.25,
         "hallucination_jump_delta": 0.3,
+        "minor_signal_threshold": 0.75,
+        "congestion_signature_threshold": 0.6,
+        "congestion_window_n": 20,
+        "degradation_window_n": 20,
+        "degradation_min_points": 12,
+        "degradation_delta": 0.08,
+        "missed_warn_threshold": 0.75,
+        "missed_block_threshold": 0.9,
         "weights": {
             "minor_signal_drift": 0.20,
             "fatigue_spike": 0.40,
@@ -120,6 +140,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "gate_mismatch": 0.70,
             "prompt_injection_suspected": 0.80,
             "gate_override_failure": 1.00,
+            "model_degradation": 0.55,
+            "model_congestion": 0.45,
+            "missed_signal_event": 0.90,
         },
         "severity_bands": {"normal_max": 0.30, "unstable_max": 0.60, "critical_min": 0.61},
     },
@@ -160,6 +183,11 @@ def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
     logging_cfg = config.get("logging", {})
     sql_cfg = config.get("logging_sql", {})
     telemetry_db_uri = os.getenv("LIONLOCK_TELEMETRY_DB_URI", "").strip()
+    if not telemetry_db_uri:
+        try:
+            telemetry_db_uri = build_postgres_dsn("writer")
+        except Exception:
+            telemetry_db_uri = ""
     if telemetry_db_uri:
         sql_cfg["uri"] = telemetry_db_uri
         sql_cfg["enabled"] = True

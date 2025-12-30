@@ -11,6 +11,8 @@ except Exception:
     create_engine = None  # type: ignore[assignment]
     text = None  # type: ignore[assignment]
 
+from .connection import validate_identifier
+from .token_auth import AUTH_SIGNATURE_FIELD, AUTH_TOKEN_ID_FIELD, prepare_event_for_sql
 SESSIONS_COLUMNS: List[Tuple[str, str]] = [
     ("session_pk", "INTEGER PRIMARY KEY AUTOINCREMENT"),
     ("session_id", "TEXT UNIQUE"),
@@ -43,6 +45,14 @@ PUBLIC_SIGNALS_COLUMNS: List[Tuple[str, str]] = [
     ("hallucination_score", "REAL"),
     ("duration_ms", "INTEGER"),
     ("config_hash", "TEXT"),
+    (
+        AUTH_TOKEN_ID_FIELD,
+        f"TEXT CHECK ({AUTH_TOKEN_ID_FIELD} IS NULL OR length({AUTH_TOKEN_ID_FIELD}) >= 12)",
+    ),
+    (
+        AUTH_SIGNATURE_FIELD,
+        f"TEXT CHECK ({AUTH_SIGNATURE_FIELD} IS NULL OR length({AUTH_SIGNATURE_FIELD}) >= 64)",
+    ),
 ]
 
 FAILSAFE_COLUMNS: List[Tuple[str, str]] = [
@@ -61,11 +71,28 @@ SIGNAL_KEY_MAP = {
 
 _WRITER: "SQLTelemetryWriter | None" = None
 _WRITER_KEY: Tuple[Any, ...] | None = None
+_STOP_SENTINEL = object()
+_ALLOWED_TABLES = {
+    "lionlock_signals",
+    "lionlock_sessions",
+    "lionlock_failsafe",
+}
+
+
+def _validate_table_name(name: str, label: str) -> str:
+    validate_identifier(name, label)
+    if name not in _ALLOWED_TABLES:
+        raise ValueError(f"Table not allowed for {label}: {name}")
+    return name
 
 
 def _create_table_sql(table: str, columns: Iterable[Tuple[str, str]]) -> str:
     cols = ", ".join(f"{name} {col_type}" for name, col_type in columns)
     return f"CREATE TABLE IF NOT EXISTS {table} ({cols})"
+
+
+def _is_unique_constraint_error(exc: Exception) -> bool:
+    return "unique" in str(exc).lower()
 
 
 def _sqlite_path_from_uri(uri: str) -> str | None:
@@ -168,6 +195,13 @@ def init_db(
 ) -> Tuple[bool, str]:
     if not uri:
         return False, "SQL URI is empty."
+    try:
+        table = _validate_table_name(table, "table")
+        sessions_table = _validate_table_name(sessions_table, "sessions_table")
+        if failsafe_table:
+            _validate_table_name(failsafe_table, "failsafe_table")
+    except ValueError as exc:
+        return False, f"SQL init failed: {exc}"
     sqlite_path = _sqlite_path_from_uri(uri)
     try:
         if sqlite_path is not None:
@@ -217,6 +251,8 @@ def _event_to_row(event: Dict[str, Any], session_pk: int | None) -> Tuple[Any, .
         _signal_value(scores, SIGNAL_KEY_MAP["hallucination_score"]),
         event.get("duration_ms"),
         event.get("config_hash"),
+        event.get(AUTH_TOKEN_ID_FIELD),
+        event.get(AUTH_SIGNATURE_FIELD),
     )
 
 
@@ -237,6 +273,8 @@ def _event_to_named_row(event: Dict[str, Any], session_pk: int | None) -> Dict[s
         "hallucination_score": _signal_value(scores, SIGNAL_KEY_MAP["hallucination_score"]),
         "duration_ms": event.get("duration_ms"),
         "config_hash": event.get("config_hash"),
+        AUTH_TOKEN_ID_FIELD: event.get(AUTH_TOKEN_ID_FIELD),
+        AUTH_SIGNATURE_FIELD: event.get(AUTH_SIGNATURE_FIELD),
     }
 
 
@@ -251,12 +289,19 @@ class SQLTelemetryWriter:
         connect_timeout_s: int,
     ) -> None:
         self.uri = uri
-        self.table = table
-        self.sessions_table = sessions_table
+        try:
+            self.table = _validate_table_name(table, "table")
+            self.sessions_table = _validate_table_name(sessions_table, "sessions_table")
+        except ValueError as exc:
+            self.available = False
+            self.error = f"SQL telemetry init failed: {exc}"
+            self.table = table
+            self.sessions_table = sessions_table
+            return
         self.batch_size = max(1, batch_size)
         self.flush_interval = max(10, flush_interval_ms) / 1000.0
         self.connect_timeout_s = max(1, connect_timeout_s)
-        self.queue: "queue.Queue[Dict[str, Any]]" = queue.Queue(
+        self.queue: "queue.Queue[Any]" = queue.Queue(
             maxsize=max(100, self.batch_size * 10)
         )
         self.stop_event = threading.Event()
@@ -264,6 +309,7 @@ class SQLTelemetryWriter:
         self.error: str | None = None
         self.sqlite_path = _sqlite_path_from_uri(uri)
         self.engine: Any = None
+        self.thread: threading.Thread | None = None
 
         if self.sqlite_path is None and (create_engine is None or text is None):
             self.available = False
@@ -293,7 +339,7 @@ class SQLTelemetryWriter:
             self.error = f"SQL telemetry init failed: {exc}"
 
     def enqueue(self, event: Dict[str, Any]) -> bool:
-        if not self.available:
+        if not self.available or self.stop_event.is_set():
             return False
         try:
             self.queue.put_nowait(event)
@@ -308,27 +354,35 @@ class SQLTelemetryWriter:
     def _run(self) -> None:
         buffer: List[Dict[str, Any]] = []
         last_flush = time.monotonic()
-        while not self.stop_event.is_set():
+        while True:
+            if self.stop_event.is_set():
+                break
             timeout = max(0.1, self.flush_interval - (time.monotonic() - last_flush))
             try:
                 item = self.queue.get(timeout=timeout)
-                buffer.append(item)
+                if item is _STOP_SENTINEL:
+                    break
+                if self.stop_event.is_set():
+                    break
+                if isinstance(item, dict):
+                    buffer.append(item)
                 if len(buffer) >= self.batch_size:
+                    if self.stop_event.is_set():
+                        break
                     self._flush(buffer)
                     buffer = []
                     last_flush = time.monotonic()
             except queue.Empty:
-                if buffer:
+                if buffer and not self.stop_event.is_set():
                     self._flush(buffer)
                     buffer = []
                     last_flush = time.monotonic()
             except Exception as exc:
                 self.error = f"SQL telemetry worker error: {exc}"
-        if buffer:
-            self._flush(buffer)
+        # Drop any remaining buffer on stop to avoid late writes in teardown.
 
     def _flush(self, buffer: List[Dict[str, Any]]) -> None:
-        if not buffer:
+        if not buffer or self.stop_event.is_set():
             return
         try:
             if self.sqlite_path is not None:
@@ -338,14 +392,21 @@ class SQLTelemetryWriter:
                 placeholders = ",".join("?" for _ in columns.split(","))
                 sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders})"
                 with sqlite3.connect(self.sqlite_path, timeout=self.connect_timeout_s) as conn:
-                    conn.executemany(
-                        sql,
-                        [
-                            _event_to_row(event, event.get("session_pk"))
-                            for event in buffer
-                        ],
-                    )
-                    conn.commit()
+                    try:
+                        conn.executemany(
+                            sql,
+                            [
+                                _event_to_row(event, event.get("session_pk"))
+                                for event in buffer
+                            ],
+                        )
+                        conn.commit()
+                    except sqlite3.IntegrityError as exc:
+                        if _is_unique_constraint_error(exc):
+                            # Treat UNIQUE violations as duplicate records (non-fatal).
+                            conn.rollback()
+                            return
+                        raise
             else:
                 if self.engine is None or text is None:
                     raise RuntimeError("SQLAlchemy not installed.")
@@ -366,7 +427,21 @@ class SQLTelemetryWriter:
             self.error = f"SQL telemetry insert failed: {exc}"
 
     def stop(self) -> None:
+        if self.stop_event.is_set():
+            return
+        self.available = False
         self.stop_event.set()
+        try:
+            self.queue.put_nowait(_STOP_SENTINEL)
+        except Exception:
+            pass
+        if self.thread is not None and self.thread.is_alive():
+            self.thread.join(timeout=2.0)
+        if self.engine is not None:
+            try:
+                self.engine.dispose()
+            except Exception:
+                pass
 
 
 def get_writer(config: Dict[str, Any]) -> SQLTelemetryWriter | None:
@@ -374,15 +449,28 @@ def get_writer(config: Dict[str, Any]) -> SQLTelemetryWriter | None:
     uri = str(config.get("uri", "")).strip()
     table = str(config.get("table", "lionlock_signals")).strip()
     sessions_table = str(config.get("sessions_table", "lionlock_sessions")).strip()
+    try:
+        table = _validate_table_name(table, "table")
+        sessions_table = _validate_table_name(sessions_table, "sessions_table")
+    except ValueError:
+        if _WRITER is not None:
+            _WRITER.stop()
+        _WRITER = None
+        _WRITER_KEY = None
+        return None
     batch_size = int(config.get("batch_size", 50))
     flush_interval_ms = int(config.get("flush_interval_ms", 1000))
     connect_timeout_s = int(config.get("connect_timeout_s", 5))
     key = (uri, table, sessions_table, batch_size, flush_interval_ms, connect_timeout_s)
     if not uri:
+        if _WRITER is not None:
+            _WRITER.stop()
         _WRITER = None
         _WRITER_KEY = None
         return None
     if _WRITER is None or _WRITER_KEY != key:
+        if _WRITER is not None:
+            _WRITER.stop()
         _WRITER = SQLTelemetryWriter(
             uri=uri,
             table=table,
@@ -393,7 +481,14 @@ def get_writer(config: Dict[str, Any]) -> SQLTelemetryWriter | None:
         )
         _WRITER_KEY = key
         if not _WRITER.available:
+            _WRITER.stop()
+            _WRITER = None
+            _WRITER_KEY = None
             return None
+    if _WRITER is not None and not _WRITER.available:
+        _WRITER = None
+        _WRITER_KEY = None
+        return None
     return _WRITER
 
 
@@ -407,10 +502,22 @@ def enqueue_event(
     if session_pk is not None:
         event = dict(event)
         event["session_pk"] = session_pk
+    ok, _, prepared = prepare_event_for_sql(event, token_config=config.get("token_auth"))
+    if not ok:
+        return False
+    event = prepared
     writer = get_writer(config)
     if writer is None:
         return False
     return writer.enqueue(event)
+
+
+def stop_writer() -> None:
+    global _WRITER, _WRITER_KEY
+    if _WRITER is not None:
+        _WRITER.stop()
+    _WRITER = None
+    _WRITER_KEY = None
 
 
 def begin_session(
@@ -425,6 +532,10 @@ def begin_session(
 ) -> int | None:
     uri = str(config.get("uri", "")).strip()
     sessions_table = str(config.get("sessions_table", "lionlock_sessions")).strip()
+    try:
+        sessions_table = _validate_table_name(sessions_table, "sessions_table")
+    except ValueError:
+        return None
     if not uri or not session_id:
         return None
     sqlite_path = _sqlite_path_from_uri(uri)
@@ -531,6 +642,10 @@ def update_session_anomalies(
 ) -> None:
     uri = str(config.get("uri", "")).strip()
     sessions_table = str(config.get("sessions_table", "lionlock_sessions")).strip()
+    try:
+        sessions_table = _validate_table_name(sessions_table, "sessions_table")
+    except ValueError:
+        return
     if not uri or not session_id:
         return
     sqlite_path = _sqlite_path_from_uri(uri)
@@ -586,6 +701,10 @@ def write_failsafe_blob(
     table = str(config.get("sql_table", "lionlock_failsafe")).strip()
     if not uri:
         return False, "SQL URI is empty."
+    try:
+        table = _validate_table_name(table, "failsafe_table")
+    except ValueError as exc:
+        return False, f"Failsafe SQL insert failed: {exc}"
     sqlite_path = _sqlite_path_from_uri(uri)
     try:
         if sqlite_path is not None:
