@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Set
 
 from . import sql_telemetry
+from .privacy import scrub_forbidden_keys
+from .token_auth import AUTH_SIGNATURE_FIELD, AUTH_TOKEN_ID_FIELD
 
 
 def _serialize(obj: Dict[str, Any]) -> str:
@@ -38,6 +40,8 @@ PUBLIC_EVENT_FIELDS = {
     "config_hash",
     "duration_ms",
     "notes",
+    AUTH_TOKEN_ID_FIELD,
+    AUTH_SIGNATURE_FIELD,
 }
 
 FORBIDDEN_KEYS = {
@@ -74,6 +78,10 @@ def _sanitize_notes(
 ) -> Optional[Dict[str, str]]:
     if not isinstance(notes, dict) or not allowlist:
         return None
+    ok, cleaned, _ = scrub_forbidden_keys(notes, mode="reject")
+    if not ok or not isinstance(cleaned, dict):
+        return None
+    notes = cleaned
     sanitized: Dict[str, str] = {}
     for key, value in notes.items():
         if key not in allowlist:
@@ -111,6 +119,12 @@ def sanitize_public_event(
             if notes is None:
                 continue
             sanitized[key] = notes
+            continue
+        if key == "signal_scores":
+            ok, cleaned, _ = scrub_forbidden_keys(event.get("signal_scores"), mode="reject")
+            if not ok or not isinstance(cleaned, dict):
+                continue
+            sanitized[key] = cleaned
             continue
         sanitized[key] = event[key]
     return sanitized
@@ -211,6 +225,7 @@ def log_event(event: Dict[str, Any], config: Dict[str, Any]) -> None:
     notes_allowlist = logging_cfg.get("notes_allowlist", [])
     notes_max_length = int(logging_cfg.get("notes_max_length", 120))
     session_pk = event.get("session_pk")
+
     record = sanitize_public_event(
         event,
         verbosity=verbosity,
