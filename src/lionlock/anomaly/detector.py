@@ -8,6 +8,7 @@ from statistics import pstdev
 from typing import Any, Dict, Iterable, List, Tuple
 
 from lionlock.core.gating import severity_band
+from lionlock.core.models import canonical_gating_decision
 from lionlock.trust_overlay.config import resolve_trust_logic_version
 from lionlock.trust_overlay.versioning import code_fingerprint
 
@@ -95,13 +96,9 @@ def _safe_int(value: Any) -> int | None:
 
 
 def _coerce_decision(value: Any) -> str:
-    if not value:
+    if value is None:
         return "UNKNOWN"
-    text = str(value).strip().upper()
-    # WARN is the canonical OSS value; REFRESH can be mapped to WARN if introduced later.
-    if text in {"ALLOW", "WARN", "BLOCK"}:
-        return text
-    return "UNKNOWN"
+    return canonical_gating_decision(str(value))
 
 
 def utc_now_iso() -> str:
@@ -398,7 +395,7 @@ def detect_anomaly_events(
         if expected_severity == "red":
             expected_decision = "BLOCK"
         elif expected_severity in ("yellow", "orange"):
-            expected_decision = "WARN"
+            expected_decision = "REFRESH"
         if expected_decision != decision:
             details = dict(base_details)
             details.update(
@@ -493,8 +490,10 @@ def detect_anomaly_events(
     posthoc_failure_risk = _clamp(max(posthoc_risk_inputs)) if posthoc_risk_inputs else 0.0
     warn_threshold = _delta(anomaly_cfg, "missed_warn_threshold", 0.75)
     block_threshold = _delta(anomaly_cfg, "missed_block_threshold", 0.9)
-    if decision in {"ALLOW", "WARN"} and posthoc_failure_risk >= warn_threshold:
-        expected_decision = "BLOCK" if posthoc_failure_risk >= block_threshold else "WARN"
+    if decision in {"ALLOW", "REFRESH"} and posthoc_failure_risk >= warn_threshold:
+        expected_decision = (
+            "BLOCK" if posthoc_failure_risk >= block_threshold else "REFRESH"
+        )
         details = dict(base_details)
         details.update(
             {
@@ -553,6 +552,7 @@ def monitor_turn(
     config: Dict[str, Any] | None,
     prompt_type: str | None = None,
     response_hash: str | None = None,
+    replay_id: str | None = None,
     trigger_signal: str | None = None,
     aggregate_score: float | None = None,
     latency_window_stats: Iterable[Any] | None = None,
@@ -591,7 +591,7 @@ def monitor_turn(
     if not anomaly_cfg.get("enabled", True):
         return events, next_state, severity_score, severity_tag
 
-    from lionlock.logging import anomaly_sql, sql_telemetry
+    from lionlock.logging import anomaly_sql, missed_signal_sql, sql_telemetry
 
     first_seen = next_state.first_seen_utc or timestamp or utc_now_iso()
     last_seen = next_state.last_seen_utc or timestamp or first_seen
@@ -607,6 +607,41 @@ def monitor_turn(
         first_seen_utc=first_seen,
         last_seen_utc=last_seen,
     )
+
+    missed_uri = str(anomaly_cfg.get("db_uri", "")).strip()
+    if missed_uri:
+        for event in events:
+            if event.get("anomaly_type") != "missed_signal_event":
+                continue
+            details = event.get("details") if isinstance(event.get("details"), dict) else {}
+            gating_decision = details.get("gating_decision") or details.get("actual_decision")
+            record = {
+                "session_id": event.get("session_id"),
+                "turn_index": event.get("turn_index"),
+                "timestamp": event.get("timestamp"),
+                "signal_bundle": (
+                    signal_bundle.as_dict()
+                    if hasattr(signal_bundle, "as_dict")
+                    else signal_bundle
+                ),
+                "gating_decision": gating_decision,
+                "decision_risk_score": details.get("decision_risk_score"),
+                "trigger_signal": details.get("trigger_signal"),
+                "trust_logic_version": event.get("trust_logic_version"),
+                "code_fingerprint": event.get("code_fingerprint"),
+                "prompt_type": event.get("prompt_type"),
+                "response_hash": event.get("response_hash"),
+                "replay_id": replay_id,
+                "miss_reason": details.get("miss_reason"),
+                "expected_decision": details.get("expected_decision"),
+                "actual_decision": details.get("actual_decision"),
+            }
+            ok, message = missed_signal_sql.record_missed_signal_event(
+                uri_or_dsn=missed_uri,
+                record=record,
+            )
+            if not ok:
+                event["missed_signal_sql_error"] = message
 
     sql_cfg = dict(config.get("logging_sql", {}))
     telemetry_cfg = config.get("telemetry", {})
@@ -642,6 +677,7 @@ def detect_anomalies(
     enabled = config.get("enabled", True)
     if not enabled:
         return anomalies, state
+    decision = canonical_gating_decision(decision)
 
     def add(anomaly_type: str, details: str | None = None) -> None:
         weight = _weight(weights_cfg, anomaly_type)
@@ -689,8 +725,8 @@ def detect_anomalies(
             if expected_severity == "red" and decision != "BLOCK":
                 add("gate_mismatch", "expected_block")
             if expected_severity in ("yellow", "orange") and decision == "ALLOW":
-                add("gate_mismatch", "expected_warn")
-            if expected_severity == "green" and decision in ("WARN", "BLOCK"):
+                add("gate_mismatch", "expected_refresh")
+            if expected_severity == "green" and decision in ("REFRESH", "BLOCK"):
                 add("gate_mismatch", "expected_allow")
         else:
             if decision != "ALLOW":

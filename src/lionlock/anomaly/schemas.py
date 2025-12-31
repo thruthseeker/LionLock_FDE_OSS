@@ -39,8 +39,8 @@ ALLOWED_FIELDS = {
     "related_request_id",
 }
 
-# WARN is canonical OSS value; REFRESH can be mapped to WARN if introduced later.
-ALLOWED_DECISIONS = {"ALLOW", "WARN", "BLOCK", "UNKNOWN"}
+# REFRESH is canonical; WARN remains a legacy alias for compatibility.
+ALLOWED_DECISIONS = {"ALLOW", "REFRESH", "WARN", "BLOCK", "UNKNOWN"}
 ALLOWED_MISS_REASONS = {"threshold", "masking", "conflict"}
 ALLOWED_PROMPT_TYPES = {"qa", "code", "creative", "other", "unknown"}
 

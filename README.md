@@ -44,17 +44,22 @@ Signals are bounded to `[0,1]` and do **not** store prompt/response text; teleme
 
 ## Quickstart (contributors)
 ```bash
-python -m venv .venv && source .venv/bin/activate
+VENV_PATH="/home/master/Desktop/lionlock_artifacts/publicrepo_LionLock_FDE/.venv"
+python -m venv "$VENV_PATH" && source "$VENV_PATH/bin/activate"
 pip install -e '.[dev]'
 python examples/basic_logger.py
 ```
 Expected: prints the log path and writes a JSONL file with fields `ts`, `event`, `payload`, `sha256`.
 
-Note: prefer an external venv path for this repo (see `VENV_REDIRECT_POLICY.yaml.md`) to avoid workspace bloat.
+Note: this repo pins a shared external venv path (see `VENV_REDIRECT_POLICY.yaml.md`) to avoid workspace bloat.
 
 Run tests:
 ```bash
 pytest -q
+```
+If you skipped the editable install, run tests with:
+```bash
+PYTHONPATH=src pytest -q
 ```
 
 ## Killer Use Case (try first)
@@ -66,9 +71,10 @@ cat build/examples/trustvault.log
 You should see one JSON line with a timestamped event and matching SHA256.
 
 ## Install (package)
-- Editable/dev install (recommended): `python -m venv .venv && source .venv/bin/activate && pip install -e '.[dev]'`
+- Editable/dev install (recommended): `python -m venv /path/to/venv && source /path/to/venv/bin/activate && pip install -e '.[dev]'`
 - GUI extras: `python -m pip install -e '.[dev,gui]'`
 - Standard install: `pip install .`
+If running from the repo without an install, use `PYTHONPATH=src` to resolve the src layout.
 
 ## Configuration
 Config is optional. Defaults:
@@ -119,7 +125,7 @@ See `docs/SECURITY.md` for reporting guidance and security tooling. Avoid world-
 Security posture highlights (OSS):
 - Token-authenticated telemetry (HMAC) with allowlist enforcement.
 - TLS configuration is explicit and env-driven.
-- Privacy-first logging: no prompts/responses stored by default.
+- Privacy-first logging: no prompts/responses stored by default; value scanning is heuristic. See `docs/SECURITY.md`.
 
 ## Releases and Changelog
 - Release process: see `RELEASE.md`

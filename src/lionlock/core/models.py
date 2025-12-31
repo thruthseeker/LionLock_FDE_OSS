@@ -1,6 +1,23 @@
 from dataclasses import dataclass
 from typing import Any, Dict
 
+_CANONICAL_DECISION_MAP = {
+    "ALLOW": "ALLOW",
+    "BLOCK": "BLOCK",
+    "REFRESH": "REFRESH",
+    "WARN": "REFRESH",
+    "UNKNOWN": "UNKNOWN",
+}
+
+
+def canonical_gating_decision(decision: str | None) -> str:
+    if decision is None:
+        return "UNKNOWN"
+    text = str(decision).strip().upper()
+    if not text:
+        return "UNKNOWN"
+    return _CANONICAL_DECISION_MAP.get(text, "UNKNOWN")
+
 
 @dataclass(frozen=True)
 class SignalScores:
@@ -61,3 +78,7 @@ class GateDecision:
     reason_code: str | None
     aggregate_score: float
     signal_scores: Dict[str, float]
+    gating_decision: str
+    decision_risk_score: float
+    trigger_signal: str
+    signal_bundle: Dict[str, Any]
