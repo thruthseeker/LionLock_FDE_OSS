@@ -71,6 +71,7 @@ def _common_columns(json_type: str) -> List[Tuple[str, str]]:
         ("code_fingerprint", "TEXT"),
         ("prompt_type", "TEXT"),
         ("response_hash", "TEXT"),
+        ("replay_id", "TEXT"),
         (
             "auth_token_id",
             "TEXT CHECK (auth_token_id IS NULL OR length(auth_token_id) >= 12)",
@@ -175,6 +176,12 @@ def _ensure_sqlite_unique_indexes(conn: sqlite3.Connection) -> None:
         "anomalies",
         "anomalies_session_turn_response_type_unique",
         ("session_id", "turn_index", "response_hash", "anomaly_type"),
+    )
+    _create_sqlite_unique_index(
+        conn,
+        "missed_signal_events",
+        "missed_signal_session_turn_response_reason_unique",
+        ("session_id", "turn_index", "response_hash", "miss_reason"),
     )
 
 

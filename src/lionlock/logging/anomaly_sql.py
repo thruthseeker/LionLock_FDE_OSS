@@ -1,4 +1,5 @@
 import json
+import math
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
@@ -12,6 +13,7 @@ except Exception:
 from .connection import validate_identifier
 from .token_auth import AUTH_SIGNATURE_FIELD, AUTH_TOKEN_ID_FIELD, prepare_event_for_sql
 from .privacy import FORBIDDEN_PAYLOAD_KEYS, scrub_forbidden_keys
+from lionlock.core.models import canonical_gating_decision
 
 ANOMALY_COLUMNS: List[Tuple[str, str]] = [
     ("anomaly_pk", "INTEGER PRIMARY KEY AUTOINCREMENT"),
@@ -170,6 +172,8 @@ def _canonical_details_payload(
     actual_decision: str | None,
     miss_reason: str | None,
 ) -> Any | None:
+    canonical_expected = _canonicalize_decision(expected_decision)
+    canonical_actual = _canonicalize_decision(actual_decision)
     payload: Any
     if details is None:
         payload = {}
@@ -204,12 +208,15 @@ def _canonical_details_payload(
             payload["related_request_id"] = related_request_id
         if weight is not None and "weight" not in payload:
             payload["weight"] = weight
-        if expected_decision and "expected_decision" not in payload:
-            payload["expected_decision"] = expected_decision
-        if actual_decision and "actual_decision" not in payload:
-            payload["actual_decision"] = actual_decision
+        if canonical_expected and "expected_decision" not in payload:
+            payload["expected_decision"] = canonical_expected
+        if canonical_actual and "actual_decision" not in payload:
+            payload["actual_decision"] = canonical_actual
         if miss_reason and "miss_reason" not in payload:
             payload["miss_reason"] = miss_reason
+        for key in ("expected_decision", "actual_decision", "gating_decision"):
+            if key in payload:
+                payload[key] = _canonicalize_decision(payload.get(key))
 
     return payload
 
@@ -269,13 +276,21 @@ def _extract_canonical_fields(details: Any, anomaly: Dict[str, Any]) -> tuple[st
             decision_risk_score = float(decision_risk_score)
         except Exception:
             decision_risk_score = None
+        if decision_risk_score is not None and not math.isfinite(decision_risk_score):
+            decision_risk_score = None
 
     if gating_decision is not None:
-        gating_decision = str(gating_decision)
+        gating_decision = _canonicalize_decision(gating_decision)
     if trigger_signal is not None:
         trigger_signal = str(trigger_signal)
 
     return gating_decision, decision_risk_score, trigger_signal
+
+
+def _canonicalize_decision(value: Any) -> str | None:
+    if value is None:
+        return None
+    return canonical_gating_decision(str(value))
 
 
 def _sanitize_signal_bundle(bundle: Any) -> str | None:
@@ -401,6 +416,8 @@ def record_anomalies(
             expected = parsed_details.get("expected_decision")
             actual = parsed_details.get("actual_decision")
             miss_reason = parsed_details.get("miss_reason")
+        expected = _canonicalize_decision(expected)
+        actual = _canonicalize_decision(actual)
 
         severity = anomaly.get("severity")
         if severity is None:
@@ -408,6 +425,9 @@ def record_anomalies(
         weight = anomaly.get("weight")
         if weight is None:
             weight = severity
+
+        expected_override = _canonicalize_decision(anomaly.get("expected_decision")) or expected
+        actual_override = _canonicalize_decision(anomaly.get("actual_decision")) or actual
 
         if use_canonical:
             gating_decision, decision_risk_score, trigger_signal = _extract_canonical_fields(
@@ -431,8 +451,8 @@ def record_anomalies(
                     details,
                     related_request_id=anomaly.get("related_request_id"),
                     weight=weight,
-                    expected_decision=anomaly.get("expected_decision") or expected,
-                    actual_decision=anomaly.get("actual_decision") or actual,
+                    expected_decision=expected_override,
+                    actual_decision=actual_override,
                     miss_reason=anomaly.get("miss_reason") or miss_reason,
                 ),
                 AUTH_TOKEN_ID_FIELD: prepared.get(AUTH_TOKEN_ID_FIELD),
@@ -451,8 +471,8 @@ def record_anomalies(
                 "weight": weight,
                 "details": _sanitize_details(details),
                 "related_request_id": anomaly.get("related_request_id"),
-                "expected_decision": anomaly.get("expected_decision") or expected,
-                "actual_decision": anomaly.get("actual_decision") or actual,
+                "expected_decision": expected_override,
+                "actual_decision": actual_override,
                 "miss_reason": anomaly.get("miss_reason") or miss_reason,
                 "trust_logic_version": anomaly.get("trust_logic_version"),
                 "code_fingerprint": anomaly.get("code_fingerprint"),

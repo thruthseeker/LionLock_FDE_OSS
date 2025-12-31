@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, Optional, Set
 from . import sql_telemetry
 from .privacy import scrub_forbidden_keys
 from .token_auth import AUTH_SIGNATURE_FIELD, AUTH_TOKEN_ID_FIELD
+from lionlock.core.models import canonical_gating_decision
 
 
 def _serialize(obj: Dict[str, Any]) -> str:
@@ -119,6 +120,17 @@ def sanitize_public_event(
             if notes is None:
                 continue
             sanitized[key] = notes
+            continue
+        if key == "decision":
+            raw_decision = event.get("decision")
+            if raw_decision is None:
+                sanitized[key] = canonical_gating_decision(None)
+                continue
+            decision_text = str(raw_decision).strip()
+            if decision_text.upper() == "ERROR":
+                sanitized[key] = "ERROR"
+                continue
+            sanitized[key] = canonical_gating_decision(decision_text)
             continue
         if key == "signal_scores":
             ok, cleaned, _ = scrub_forbidden_keys(event.get("signal_scores"), mode="reject")

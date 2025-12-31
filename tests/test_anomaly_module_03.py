@@ -154,7 +154,7 @@ def test_partial_thresholds_fallback_to_defaults() -> None:
     ]
     assert gate_mismatches
     details = gate_mismatches[0]["details"]
-    assert details["expected_decision"] == "WARN"
+    assert details["expected_decision"] == "REFRESH"
 
 
 def test_anomaly_sql_persistence() -> None:

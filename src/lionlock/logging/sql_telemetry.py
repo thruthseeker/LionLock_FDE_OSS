@@ -13,6 +13,7 @@ except Exception:
 
 from .connection import validate_identifier
 from .token_auth import AUTH_SIGNATURE_FIELD, AUTH_TOKEN_ID_FIELD, prepare_event_for_sql
+from lionlock.core.models import canonical_gating_decision
 SESSIONS_COLUMNS: List[Tuple[str, str]] = [
     ("session_pk", "INTEGER PRIMARY KEY AUTOINCREMENT"),
     ("session_id", "TEXT UNIQUE"),
@@ -68,6 +69,15 @@ SIGNAL_KEY_MAP = {
     "context_score": "context_adherence",
     "hallucination_score": "hallucination_risk",
 }
+
+
+def _canonicalize_decision(value: Any) -> str:
+    if value is None:
+        return canonical_gating_decision(None)
+    text = str(value).strip()
+    if text.upper() == "ERROR":
+        return "ERROR"
+    return canonical_gating_decision(text)
 
 _WRITER: "SQLTelemetryWriter | None" = None
 _WRITER_KEY: Tuple[Any, ...] | None = None
@@ -240,7 +250,7 @@ def _event_to_row(event: Dict[str, Any], session_pk: int | None) -> Tuple[Any, .
         session_pk,
         event.get("timestamp_utc"),
         event.get("request_id"),
-        event.get("decision"),
+        _canonicalize_decision(event.get("decision")),
         event.get("severity"),
         event.get("reason_code"),
         event.get("aggregate_score"),
@@ -262,7 +272,7 @@ def _event_to_named_row(event: Dict[str, Any], session_pk: int | None) -> Dict[s
         "session_pk": session_pk,
         "timestamp_utc": event.get("timestamp_utc"),
         "request_id": event.get("request_id"),
-        "decision": event.get("decision"),
+        "decision": _canonicalize_decision(event.get("decision")),
         "severity": event.get("severity"),
         "reason_code": event.get("reason_code"),
         "aggregate_score": event.get("aggregate_score"),
