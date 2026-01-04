@@ -79,7 +79,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "logging": {
         "enabled": True,
-        "backend": "jsonl",
+        "backend": "sql",
         "path": "logs/lionlock_events.jsonl",
         "verbosity": "normal",
         "retention_events": 2000,
@@ -88,12 +88,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "notes_max_length": 120,
     },
     "logging_sql": {
-        "enabled": False,
+        "enabled": True,
+        "token": "DO_MY_SECRET_TOKEN",
         "uri": "",
         "table": "lionlock_signals",
         "batch_size": 50,
         "flush_interval_ms": 1000,
         "connect_timeout_s": 5,
+        "failsafe": False,
         "token_auth": {
             "enabled": False,
             "mode": "required",
@@ -182,6 +184,11 @@ def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
 
     logging_cfg = config.get("logging", {})
     sql_cfg = config.get("logging_sql", {})
+    env_token = os.getenv("LIONLOCK_TELEMETRY_TOKEN", "").strip() or os.getenv(
+        "LIONLOCK_SQL_TOKEN", ""
+    ).strip()
+    if env_token:
+        sql_cfg["token"] = env_token
     telemetry_db_uri = os.getenv("LIONLOCK_TELEMETRY_DB_URI", "").strip()
     if not telemetry_db_uri:
         try:
@@ -190,7 +197,13 @@ def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
             telemetry_db_uri = ""
     if telemetry_db_uri:
         sql_cfg["uri"] = telemetry_db_uri
+        sql_cfg["token"] = telemetry_db_uri
         sql_cfg["enabled"] = True
+    backend = str(logging_cfg.get("backend") or "sql").lower()
+    if sql_cfg.get("enabled") and backend not in {"sql", "both"}:
+        raise RuntimeError("SQL telemetry requires logging.backend to be 'sql' or 'both'.")
+    if sql_cfg.get("enabled") and not str(sql_cfg.get("token", "")).strip():
+        raise RuntimeError("logging_sql.token is required when SQL telemetry is enabled.")
     if sql_cfg.get("enabled") and logging_cfg.get("content_policy") != "signals_only":
         logging_cfg["content_policy"] = "signals_only"
         warnings.warn(

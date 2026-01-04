@@ -54,13 +54,25 @@ def main() -> int:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    sql_cfg = config.get("logging_sql", {})
+    sql_cfg = dict(config.get("logging_sql", {}))
     failsafe_cfg = config.get("failsafe", {})
     telemetry_cfg = config.get("telemetry", {})
 
-    uri = args.uri or str(sql_cfg.get("uri", "")).strip()
-    table = args.table or str(sql_cfg.get("table", "lionlock_signals")).strip()
-    sessions_table = str(telemetry_cfg.get("sessions_table", "lionlock_sessions")).strip()
+    if "sessions_table" not in sql_cfg and telemetry_cfg:
+        sql_cfg["sessions_table"] = telemetry_cfg.get("sessions_table", "lionlock_sessions")
+    if args.uri:
+        sql_cfg["token"] = args.uri
+        sql_cfg["uri"] = args.uri
+        sql_cfg["enabled"] = True
+    try:
+        resolved_sql_cfg = sql_telemetry.resolve_sql_config(sql_cfg)
+    except Exception as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 1
+
+    uri = resolved_sql_cfg.get("uri", "")
+    table = args.table or str(resolved_sql_cfg.get("table", "lionlock_signals")).strip()
+    sessions_table = str(resolved_sql_cfg.get("sessions_table", "lionlock_sessions")).strip()
     failsafe_table = args.failsafe_table or str(failsafe_cfg.get("sql_table", "")).strip()
 
     include_failsafe = args.include_failsafe or failsafe_cfg.get("storage") == "sql"

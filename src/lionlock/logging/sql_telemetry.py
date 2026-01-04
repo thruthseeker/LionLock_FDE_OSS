@@ -1,9 +1,11 @@
+import os
 import queue
 import sqlite3
 import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
+from urllib.parse import urlparse
 
 try:
     from sqlalchemy import create_engine, text
@@ -11,7 +13,7 @@ except Exception:
     create_engine = None  # type: ignore[assignment]
     text = None  # type: ignore[assignment]
 
-from .connection import validate_identifier
+from .connection import load_dotenv, validate_identifier
 from .token_auth import AUTH_SIGNATURE_FIELD, AUTH_TOKEN_ID_FIELD, prepare_event_for_sql
 from lionlock.core.models import canonical_gating_decision
 SESSIONS_COLUMNS: List[Tuple[str, str]] = [
@@ -87,6 +89,68 @@ _ALLOWED_TABLES = {
     "lionlock_sessions",
     "lionlock_failsafe",
 }
+DEFAULT_SQL_TELEMETRY_TOKEN = "DO_MY_SECRET_TOKEN"
+_SQL_TOKEN_ENV_KEYS = (
+    "LIONLOCK_TELEMETRY_TOKEN",
+    "LIONLOCK_SQL_TELEMETRY_TOKEN",
+    "LIONLOCK_SQL_TOKEN",
+)
+_SQL_URI_ENV_KEYS = ("LIONLOCK_TELEMETRY_DB_URI",)
+_TOKEN_MAP = {
+    DEFAULT_SQL_TELEMETRY_TOKEN: "postgresql://user:pass@host:5432/dbname",
+}
+_ALLOWED_SCHEMES = ("postgres", "postgresql", "sqlite")
+
+
+def _env_first(*keys: str) -> str:
+    for key in keys:
+        value = os.getenv(key)
+        if value is None:
+            continue
+        stripped = value.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def resolve_sql_uri(token: str) -> str:
+    """Map a token to a SQL URI; fallback allows direct URIs for testing."""
+    load_dotenv()
+    env_token = _env_first(*_SQL_TOKEN_ENV_KEYS)
+    chosen = env_token or token or ""
+    chosen = chosen.strip()
+    if not chosen:
+        raise RuntimeError("Missing telemetry token.")
+    mapped = _TOKEN_MAP.get(chosen) or chosen
+    uri = mapped.strip()
+    if not uri:
+        raise RuntimeError("Telemetry token did not resolve to a SQL URI.")
+    parsed = urlparse(uri)
+    scheme = parsed.scheme.lower()
+    if not scheme or not scheme.startswith(_ALLOWED_SCHEMES):
+        raise RuntimeError(
+            "Telemetry token must resolve to a Postgres URI (sqlite allowed for tests only)."
+        )
+    return uri
+
+
+def resolve_sql_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = dict(config or {})
+    load_dotenv()
+    env_token = _env_first(*_SQL_TOKEN_ENV_KEYS)
+    env_uri = _env_first(*_SQL_URI_ENV_KEYS)
+    token = (
+        env_token
+        or env_uri
+        or str(cfg.get("token", "")).strip()
+        or str(cfg.get("uri", "")).strip()
+    )
+    if not token:
+        raise RuntimeError("logging_sql.token is required when SQL telemetry is enabled.")
+    resolved_uri = resolve_sql_uri(token)
+    cfg["token"] = token
+    cfg["uri"] = resolved_uri
+    return cfg
 
 
 def _validate_table_name(name: str, label: str) -> str:
@@ -389,6 +453,7 @@ class SQLTelemetryWriter:
                     last_flush = time.monotonic()
             except Exception as exc:
                 self.error = f"SQL telemetry worker error: {exc}"
+                self.available = False
         # Drop any remaining buffer on stop to avoid late writes in teardown.
 
     def _flush(self, buffer: List[Dict[str, Any]]) -> None:
@@ -435,6 +500,7 @@ class SQLTelemetryWriter:
                     )
         except Exception as exc:
             self.error = f"SQL telemetry insert failed: {exc}"
+            self.available = False
 
     def stop(self) -> None:
         if self.stop_event.is_set():
@@ -456,18 +522,19 @@ class SQLTelemetryWriter:
 
 def get_writer(config: Dict[str, Any]) -> SQLTelemetryWriter | None:
     global _WRITER, _WRITER_KEY
-    uri = str(config.get("uri", "")).strip()
-    table = str(config.get("table", "lionlock_signals")).strip()
-    sessions_table = str(config.get("sessions_table", "lionlock_sessions")).strip()
+    resolved_cfg = resolve_sql_config(config)
+    uri = str(resolved_cfg.get("uri", "")).strip()
+    table = str(resolved_cfg.get("table", "lionlock_signals")).strip()
+    sessions_table = str(resolved_cfg.get("sessions_table", "lionlock_sessions")).strip()
     try:
         table = _validate_table_name(table, "table")
         sessions_table = _validate_table_name(sessions_table, "sessions_table")
-    except ValueError:
+    except ValueError as exc:
         if _WRITER is not None:
             _WRITER.stop()
         _WRITER = None
         _WRITER_KEY = None
-        return None
+        raise RuntimeError(f"SQL telemetry config invalid: {exc}") from exc
     batch_size = int(config.get("batch_size", 50))
     flush_interval_ms = int(config.get("flush_interval_ms", 1000))
     connect_timeout_s = int(config.get("connect_timeout_s", 5))
@@ -477,7 +544,7 @@ def get_writer(config: Dict[str, Any]) -> SQLTelemetryWriter | None:
             _WRITER.stop()
         _WRITER = None
         _WRITER_KEY = None
-        return None
+        raise RuntimeError("SQL telemetry URI is empty.")
     if _WRITER is None or _WRITER_KEY != key:
         if _WRITER is not None:
             _WRITER.stop()
@@ -494,11 +561,17 @@ def get_writer(config: Dict[str, Any]) -> SQLTelemetryWriter | None:
             _WRITER.stop()
             _WRITER = None
             _WRITER_KEY = None
-            return None
+            raise RuntimeError(_WRITER.error or "SQL telemetry writer unavailable.")
     if _WRITER is not None and not _WRITER.available:
         _WRITER = None
         _WRITER_KEY = None
-        return None
+        raise RuntimeError("SQL telemetry writer unavailable.")
+    if _WRITER is not None and _WRITER.error:
+        error = _WRITER.error
+        _WRITER.stop()
+        _WRITER = None
+        _WRITER_KEY = None
+        raise RuntimeError(error)
     return _WRITER
 
 
@@ -509,17 +582,24 @@ def enqueue_event(
 ) -> bool:
     if not config.get("enabled"):
         return False
+    resolved_cfg = resolve_sql_config(config)
     if session_pk is not None:
         event = dict(event)
         event["session_pk"] = session_pk
-    ok, _, prepared = prepare_event_for_sql(event, token_config=config.get("token_auth"))
+    ok, reason, prepared = prepare_event_for_sql(
+        event, token_config=resolved_cfg.get("token_auth")
+    )
     if not ok:
-        return False
+        raise RuntimeError(f"SQL telemetry token verification failed: {reason}.")
     event = prepared
-    writer = get_writer(config)
+    writer = get_writer(resolved_cfg)
     if writer is None:
-        return False
-    return writer.enqueue(event)
+        raise RuntimeError("SQL telemetry writer unavailable.")
+    if writer.error:
+        raise RuntimeError(writer.error)
+    if not writer.enqueue(event):
+        raise RuntimeError("SQL telemetry queue rejected the event.")
+    return True
 
 
 def stop_writer() -> None:
@@ -540,8 +620,9 @@ def begin_session(
     config_hash: str,
     content_policy: str,
 ) -> int | None:
-    uri = str(config.get("uri", "")).strip()
-    sessions_table = str(config.get("sessions_table", "lionlock_sessions")).strip()
+    resolved_cfg = resolve_sql_config(config)
+    uri = str(resolved_cfg.get("uri", "")).strip()
+    sessions_table = str(resolved_cfg.get("sessions_table", "lionlock_sessions")).strip()
     try:
         sessions_table = _validate_table_name(sessions_table, "sessions_table")
     except ValueError:
@@ -650,8 +731,9 @@ def update_session_anomalies(
     severity_score: float,
     severity_tag: str,
 ) -> None:
-    uri = str(config.get("uri", "")).strip()
-    sessions_table = str(config.get("sessions_table", "lionlock_sessions")).strip()
+    resolved_cfg = resolve_sql_config(config)
+    uri = str(resolved_cfg.get("uri", "")).strip()
+    sessions_table = str(resolved_cfg.get("sessions_table", "lionlock_sessions")).strip()
     try:
         sessions_table = _validate_table_name(sessions_table, "sessions_table")
     except ValueError:
@@ -707,8 +789,12 @@ def write_failsafe_blob(
     request_id: str,
     payload_b64: str,
 ) -> Tuple[bool, str]:
-    uri = str(config.get("uri", "")).strip()
-    table = str(config.get("sql_table", "lionlock_failsafe")).strip()
+    try:
+        resolved_cfg = resolve_sql_config(config)
+    except Exception as exc:
+        return False, f"Failsafe SQL insert failed: {exc}"
+    uri = str(resolved_cfg.get("uri", "")).strip()
+    table = str(resolved_cfg.get("sql_table", "lionlock_failsafe")).strip()
     if not uri:
         return False, "SQL URI is empty."
     try:

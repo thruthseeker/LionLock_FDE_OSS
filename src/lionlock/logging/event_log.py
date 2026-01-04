@@ -230,7 +230,12 @@ def log_event(event: Dict[str, Any], config: Dict[str, Any]) -> None:
         sql_cfg["sessions_table"] = telemetry_cfg.get("sessions_table", "lionlock_sessions")
     if not logging_cfg.get("enabled", True):
         return
-    backend = str(logging_cfg.get("backend", "jsonl")).lower()
+    backend = str(logging_cfg.get("backend", "sql")).lower()
+    sql_enabled = bool(sql_cfg.get("enabled"))
+    if sql_enabled and backend not in {"sql", "both"}:
+        raise RuntimeError("SQL telemetry enabled but logging.backend is not 'sql' or 'both'.")
+    if backend in {"sql", "both"} and not sql_enabled:
+        raise RuntimeError("logging.backend requires SQL but logging_sql.enabled is false.")
     if backend == "off":
         return
     verbosity = str(logging_cfg.get("verbosity", "normal")).lower()
@@ -245,6 +250,9 @@ def log_event(event: Dict[str, Any], config: Dict[str, Any]) -> None:
         notes_max_length=notes_max_length,
     )
 
+    if sql_enabled and backend in {"sql", "both"}:
+        sql_telemetry.enqueue_event(sql_cfg, record, session_pk=session_pk)
+
     if backend in ("jsonl", "both"):
         path = logging_cfg.get("path", "logs/lionlock_events.jsonl")
         append_event(
@@ -254,6 +262,3 @@ def log_event(event: Dict[str, Any], config: Dict[str, Any]) -> None:
             notes_allowlist=notes_allowlist,
             notes_max_length=notes_max_length,
         )
-
-    if backend in ("sql", "both") and sql_cfg.get("enabled"):
-        sql_telemetry.enqueue_event(sql_cfg, record, session_pk=session_pk)
