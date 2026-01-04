@@ -1,0 +1,131 @@
+{
+  "files": [
+    {
+      "bytes": 922,
+      "path": ".gitignore",
+      "sha256": "3180979b5bb44902c882ac71f0d91662702466975e5028b14c51378fd57466cf"
+    },
+    {
+      "bytes": 2201,
+      "path": "README.md",
+      "sha256": "00fec27ee9295934799a7a0e1b8624740d0d76bf2abab9bdee2acc14faffc2c4"
+    },
+    {
+      "bytes": 4007,
+      "path": "docs/MODULE_06_REPLAY.md",
+      "sha256": "ee02341cd15c59faa3422a22c483d39dafb137db3a43267ea609b8b5214daa4a"
+    },
+    {
+      "bytes": 4516,
+      "path": "docs/trust_overlay_schema.json",
+      "sha256": "e3462fe52001c7fa6b140c5cc93388eabf3dc3d9db69463feb01877d57be05ee"
+    },
+    {
+      "bytes": 3074,
+      "path": "module07_jobcard.json",
+      "sha256": "0db588f8f29bfde8f534e61b8fff2cd1b61628d85e69c62e1de3510e7e0aac6f"
+    },
+    {
+      "bytes": 1379,
+      "path": "pyproject.toml",
+      "sha256": "b98c2fd647e20ed71ee292313a81d19bfcd02b06548054c3885278f88e9e61b8"
+    },
+    {
+      "bytes": 316,
+      "path": "src/lionlock/replay/__init__.py",
+      "sha256": "8a423356abbd26224c226679613f72f3b0820888eacd04e6e5ca3af997e0486e"
+    },
+    {
+      "bytes": 4245,
+      "path": "src/lionlock/replay/cli.py",
+      "sha256": "50e61d78ab3fb14dfd8f8b9e996234d671f9f8d7fb8353c04849140e35f89295"
+    },
+    {
+      "bytes": 7504,
+      "path": "src/lionlock/replay/evaluation_labels.py",
+      "sha256": "f956f918526769a0cb6918363a02fc5223451c430b7a306a3a135b3b4f6d2e00"
+    },
+    {
+      "bytes": 4292,
+      "path": "src/lionlock/replay/policy_registry.py",
+      "sha256": "73d64e96ebba1aeb686c4b4e6049fa8528b704ab5ddb5259398bb50142de6333"
+    },
+    {
+      "bytes": 14847,
+      "path": "src/lionlock/replay/replay_engine.py",
+      "sha256": "f9487eb1e8d01a121f3c34786cd758026cedfecbd153bc64d842ed8afc55db3b"
+    },
+    {
+      "bytes": 3276,
+      "path": "src/lionlock/replay/reporting.py",
+      "sha256": "133d472da8746c73f714adf77dc5e68e8290ae625071a6c4bb1771e6352b2b74"
+    },
+    {
+      "bytes": 5900,
+      "path": "src/lionlock/replay/sql_reader.py",
+      "sha256": "bcf95733e97eaa1b15541d11504f3e5bb63db0594d8e559274c06cf3d577383b"
+    },
+    {
+      "bytes": 129,
+      "path": "src/lionlock/sim/__init__.py",
+      "sha256": "09685c5c8b170ae4d3fe2c62ae07e285e0f8cf507ea9c39b7d9943c2086169c4"
+    },
+    {
+      "bytes": 2524,
+      "path": "src/lionlock/sim/cli.py",
+      "sha256": "9c8b2c0bf912b2c871fe3178905a8df159fecce458c8a61fa7ad259805dbf8ad"
+    },
+    {
+      "bytes": 695,
+      "path": "src/lionlock/sim/labels.py",
+      "sha256": "f011b295c40f053f8405f4fa9fe20c70d2be9d6124e68bffa880e61337d69414"
+    },
+    {
+      "bytes": 8063,
+      "path": "src/lionlock/sim/profiles.py",
+      "sha256": "d677191349c8153003c5a1a641b49d85bf51e1810a50374ef3c568c00971fca7"
+    },
+    {
+      "bytes": 4058,
+      "path": "src/lionlock/sim/reporting.py",
+      "sha256": "4c5e3f9a3fc4714e6619cd080791ba385c9c03e79c4750d1b47e2549d5f39abe"
+    },
+    {
+      "bytes": 22023,
+      "path": "src/lionlock/sim/runner.py",
+      "sha256": "44779338399ce4c8ae57dd93382f2b0aff2dc91379c1665dd41f98a66dbefb26"
+    },
+    {
+      "bytes": 5252,
+      "path": "tests/test_module06_labels_join.py",
+      "sha256": "38cba70694c78c16acb45abfd8e5b5962bcda701b38bd89d97de5ccda8067b31"
+    },
+    {
+      "bytes": 2332,
+      "path": "tests/test_module06_policy_registry.py",
+      "sha256": "4a9a2fff6b7c237cc1cee98f5ab13f889a4851c0782f02913311c1aa8ba9dcac"
+    },
+    {
+      "bytes": 3355,
+      "path": "tests/test_module06_replay_determinism.py",
+      "sha256": "57882279b5f352113b12bc344641bd4f1b7ded3b9439637a22ba31d7d9f13dc4"
+    },
+    {
+      "bytes": 9497,
+      "path": "tests/test_module06_security_checks.py",
+      "sha256": "665a6a035dbc483ef89315d064868ca214267eca70f21ab3780c99566813108b"
+    },
+    {
+      "bytes": 5199,
+      "path": "tests/test_module06_writeback_optin.py",
+      "sha256": "aeb24fdc2d46dcd117fa8175c2752ba7e3253ad95af0fd8c6de229ac73ab2246"
+    },
+    {
+      "bytes": 3646,
+      "path": "tests/test_module07_standard_determinism.py",
+      "sha256": "a478b5405268e8d81247f6b753c8e1bc3ca8ba82c4b3a38aed9fd0d973c08828"
+    }
+  ],
+  "schema": "lionlock_artifacts_manifest_v1",
+  "scope": "module06+module07"
+}

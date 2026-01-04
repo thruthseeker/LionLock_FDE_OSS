@@ -64,3 +64,6 @@ context/
 *.p12
 *.crt
 *ca-cert _writer_crt
+
+# Simulation outputs (Module 07)
+sim_out/

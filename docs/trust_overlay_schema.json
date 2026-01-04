@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LionLock Trust Overlay Record",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "trust_logic_version": {
+      "type": "string",
+      "description": "Trust overlay logic version identifier."
+    },
+    "code_fingerprint": {
+      "type": "string",
+      "description": "Code/build fingerprint for provenance."
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "UTC timestamp for the trust overlay record."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Session identifier."
+    },
+    "turn_index": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Turn index (nullable)."
+    },
+    "model_id": {
+      "type": "string",
+      "description": "Model identifier."
+    },
+    "trust_score": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Trust score in [0,1]."
+    },
+    "trust_label": {
+      "type": "string",
+      "enum": [
+        "TRUSTED",
+        "MONITOR",
+        "AT_RISK",
+        "UNTRUSTED"
+      ],
+      "description": "Derived trust label."
+    },
+    "confidence_band": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "lower": { "type": "number" },
+        "upper": { "type": "number" },
+        "method": { "type": "string" },
+        "n": { "type": "integer" },
+        "std": { "type": "number" },
+        "k": { "type": "number" }
+      },
+      "required": [
+        "lower",
+        "upper",
+        "method",
+        "n",
+        "std",
+        "k"
+      ],
+      "description": "Confidence band metadata."
+    },
+    "volatility": {
+      "type": "number",
+      "description": "Volatility metric."
+    },
+    "drift": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "drift_detected": { "type": "boolean" },
+        "method": { "type": "string" },
+        "recent_mean": { "type": "number" },
+        "baseline_mean": { "type": "number" },
+        "delta": { "type": "number" },
+        "threshold": { "type": "number" },
+        "recent_n": { "type": "integer" },
+        "baseline_n": { "type": "integer" }
+      },
+      "required": [
+        "drift_detected",
+        "method",
+        "recent_mean",
+        "baseline_mean",
+        "delta",
+        "threshold",
+        "recent_n",
+        "baseline_n"
+      ],
+      "description": "Drift detection metadata."
+    },
+    "badge": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "INSUFFICIENT_DATA",
+        "STABLE",
+        "VOLATILE",
+        "DRIFTING",
+        "RECOVERING",
+        "CLEAN_RUN",
+        null
+      ],
+      "description": "Optional trust badge."
+    },
+    "prompt_type": {
+      "type": "string",
+      "enum": [
+        "qa",
+        "code",
+        "creative",
+        "other"
+      ],
+      "description": "Prompt type metadata."
+    },
+    "model_config_snapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Model config snapshot at record time."
+    },
+    "deployment_context_snapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Deployment context snapshot at record time."
+    },
+    "signal_summary": {
+      "type": "object",
+      "additionalProperties": true,
+      "anyOf": [
+        {
+          "required": [
+            "overall_risk"
+          ]
+        },
+        {
+          "required": [
+            "fatigue_score"
+          ]
+        }
+      ],
+      "description": "Signal summary (overall_risk or fatigue_score required)."
+    },
+    "trigger_flags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Trigger flags associated with the record."
+    },
+    "response_hash": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Optional response hash."
+    },
+    "pseudonymous_user_key": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Optional pseudonymous user key."
+    }
+  },
+  "required": [
+    "trust_logic_version",
+    "code_fingerprint",
+    "timestamp",
+    "session_id",
+    "turn_index",
+    "model_id",
+    "trust_score",
+    "trust_label",
+    "confidence_band",
+    "volatility",
+    "drift",
+    "prompt_type",
+    "model_config_snapshot",
+    "deployment_context_snapshot",
+    "signal_summary",
+    "trigger_flags",
+    "response_hash"
+  ]
+}

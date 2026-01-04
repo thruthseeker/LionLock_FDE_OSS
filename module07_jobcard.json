@@ -1,0 +1,91 @@
+{
+  "module": "lionlock_module_07_simulation_harness",
+  "status": "fixup_required",
+  "enforcement_scope": "Module07-only",
+  "doctrine": {
+    "canonical_logging_engine": "PostgreSQL",
+    "canonical_pipeline_origin": "Module04+ (SQL telemetry backbone)",
+    "goal": "Module 07 must not drift from Postgres-first telemetry assumptions; SQLite is fallback only."
+  },
+  "db_resolution": {
+    "override_order": ["--db", "env:LIONLOCK_DB_URL", "runtime_constant:LIONLOCK_DB_CANONICAL"],
+    "runtime_constant": {
+      "name": "LIONLOCK_DB_CANONICAL",
+      "value": "postgresql://localhost/lionlock",
+      "notes": [
+        "Module07 default behavior is Postgres-first.",
+        "Real deployments inject DSN via token pipeline or environment."
+      ]
+    },
+    "defaults": {
+      "postgres_schema": "public",
+      "sqlite_schema": "main",
+      "sqlite_default_path": "./sim_out/lionlock_sim.db"
+    }
+  },
+  "sqlite_fallback_policy": {
+    "allowed": true,
+    "explicit_opt_in": [
+      "--db sqlite:///...",
+      "env:LIONLOCK_DB_URL=sqlite:///..."
+    ],
+    "implicit_offline_fallback": {
+      "allowed": true,
+      "only_when": [
+        "DB resolves to Postgres by default",
+        "Postgres connection test fails",
+        "offline/no-internet detected"
+      ],
+      "behavior": [
+        "Log locally to SQLite",
+        "Emit warning: local-only logs not synced"
+      ]
+    },
+    "forbidden": [
+      "silent fallback to SQLite when Postgres is available",
+      "defaulting to SQLite in any online/connected scenario"
+    ],
+    "sync_roadmap": {
+      "status": "NOT NOW",
+      "notes": [
+        "No background sync daemons.",
+        "Log minimal metadata for future migration only."
+      ]
+    }
+  },
+  "startup_checks": {
+    "must_log": ["chosen_db_engine", "db_source", "schema_in_use"],
+    "must_fail_loud": [
+      "No DB resolved after override order",
+      "SQLite becomes default in an online context"
+    ],
+    "must_warn": [
+      "SQLite fallback engaged due to offline/no-postgres",
+      "Local logs will not sync until future tooling exists"
+    ]
+  },
+  "compatibility_guardrails": [
+    "Preserve shared SQL event vocabulary and schema assumptions from Modules 04–06.",
+    "Stamp policy_version + config_hash consistently for replay compatibility.",
+    "Do not introduce SQLite-only assumptions into shared logging helpers."
+  ],
+  "output_contract": {
+    "required_artifacts": ["report.json", "report.md", "labels.jsonl"],
+    "db_writes": [
+      "events (Postgres normally; SQLite only if fallback engaged)",
+      "missed_signal_events (Postgres normally; SQLite only if fallback engaged)"
+    ]
+  },
+  "non_goals": [
+    "Do not redesign Modules 04–06 in this pass.",
+    "Do not implement SQLite->Postgres sync now."
+  ],
+  "verify": {
+    "commands": [
+      "python -m pytest -q",
+      "python -m compileall -q src",
+      "lionlock-sim run --profile standard --turns 100 --seed 123 --db sqlite:///./sim_out/lionlock_sim.db",
+      "lionlock-sim run --profile standard --turns 100 --seed 123"
+    ]
+  }
+}

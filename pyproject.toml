@@ -38,6 +38,8 @@ failsafe = [
   "cryptography>=42",
 ]
 
+[project.scripts]
+lionlock-sim = "lionlock.sim.cli:main"
 [tool.setuptools]
 package-dir = { "" = "src" }
 
