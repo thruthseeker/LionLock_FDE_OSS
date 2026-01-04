@@ -1,46 +1,41 @@
-# LionLock
+# LionLock FDE – Pre-Beta Public Release
 
-Welcome to LionLock FDE! We're excited to announce that we've successfully integrated and completed Modules 6 and 7. As of now, our repo includes:
+**LionLock_FDE** is a modular **Fatigue Detection Engine** and **Trust Telemetry System** for LLMs.
 
-- Module 06: The replay and evaluation engine for trust and fatigue scenarios. This module brings in replay capabilities with a focus on policy-driven simulations and OSS-safe evaluations.
-- Module 07: Our simulation harness for deterministic trust profiling, now fully operational. It's built to run in a Postgres-first mode with explicit SQLite fallback, ensuring full determinism and robust audit trails.
+It’s designed to detect signal drift, block hallucinated output, and log behavioral metadata to a secure, token-authenticated PostgreSQL backend — **out of the box**.
 
-With these modules in place, we've moved beyond our earlier Module 4 milestones and are now focusing on the final integration stages and real-world OSS readiness. Stay tuned for more updates as we continue to refine and enhance LionLock!
+This is the **Open Source Public Preview** of LionLock, suitable for developers, researchers, and AI safety teams. No premium modules or proprietary datasets are included.
 
-Deterministic fatigue-signal scoring and SQL-first reliability telemetry for LLM applications (OSS core).
+---
 
-LionLock helps developers **measure** and **log** reliability/fatigue signals in a privacy-first, audit-ready way.
-It is not a hosted service and not a full LLM gateway.
+## 🔍 Modules Included
 
-## Status
+### ✅ Module 01 – Trust Overlay
+Captures inbound signal data. Sends telemetry to PostgreSQL using a **token-based login system**. Auto-connects on launch — no setup needed.
 
-**Pre-beta** (OSS core is usable; APIs may evolve).
-- Modules 1-4: usable
-- Module 5 (gating): in progress
-- Module 6 (replay/evaluation): usable
-- Module 7 (simulation harness): usable
+### ✅ Module 02 – Signal Scoring Engine
+Normalizes session signals. Flags low-confidence or inconsistent prompt structure.
 
-## Privacy model (OSS)
+### ✅ Module 03 – Drift & Fatigue Anomaly Detection
+Detects hallucination markers, entropy spikes, and output degradation over time.
 
-- **No raw prompt/response text is logged by default**
-- Telemetry defaults to derived metrics only (e.g. `prompt_type` + `response_hash`, signal bundles)
-- SQL is the canonical log pipeline (SQLite local; Postgres supported)
+### ✅ Module 04 – SQL Telemetry Logging
+Backed by PostgreSQL. Supports opt-in logging, test flags, and downstream replay.
 
-## Module overview (OSS)
+### ✅ Module 05 – Gating Core & Policy Engine
+Interrupts output in real time if trust drops below configured thresholds.
 
-- **Module 1** - Session + request scaffolding
-- **Module 2** - Signal scoring (`SignalBundle`)
-- **Module 3** - Anomaly detection
-- **Module 4** - SQL telemetry (append-only events + missed-signal schema)
-- **Module 5** - Gating core (**in progress**) - decision tokens remain **ALLOW / REFRESH / BLOCK**
-- **Module 6** - Replay + evaluation (read-only by default; optional write-back is explicit)
-- **Module 7** - Simulation harness (deterministic scenario generator + SQL logging; Postgres-first with explicit SQLite fallback)
+### ✅ Module 06 – Replay Evaluation Layer
+Processes saved sessions to check missed signals, drift accumulation, and gate performance.
 
-## Quickstart (dev)
+### ✅ Module 07 – Simulation Harness
+Stress-tests policies across multiple profiles and gating thresholds.
+
+---
+
+## 🚀 Get Started
 
 ```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -e '.[dev]'
-pytest -q
-```
+git clone https://github.com/truthseeker/LionLock_FDE_OSS.git
+cd LionLock_FDE_OSS
+bash tools/dev_setup.sh
