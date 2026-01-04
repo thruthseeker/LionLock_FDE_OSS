@@ -32,6 +32,8 @@ ANOMALY_COLUMNS: List[Tuple[str, str]] = [
     ("actual_decision", "TEXT"),
     ("miss_reason", "TEXT"),
     ("trust_logic_version", "TEXT"),
+    ("policy_version", "TEXT"),
+    ("config_hash", "TEXT"),
     ("code_fingerprint", "TEXT"),
     (AUTH_TOKEN_ID_FIELD, "TEXT"),
     (AUTH_SIGNATURE_FIELD, "TEXT"),
@@ -47,6 +49,8 @@ CANONICAL_ANOMALY_COLUMNS: List[Tuple[str, str]] = [
     ("decision_risk_score", "REAL"),
     ("trigger_signal", "TEXT"),
     ("trust_logic_version", "TEXT"),
+    ("policy_version", "TEXT"),
+    ("config_hash", "TEXT"),
     ("code_fingerprint", "TEXT"),
     ("prompt_type", "TEXT"),
     ("response_hash", "TEXT"),
@@ -127,6 +131,30 @@ def _postgres_table_columns(uri: str, table: str, schema: str = "public") -> set
 
 def _serialize_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _normalize_policy_version(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if len(text) > 64:
+        return None
+    return text
+
+
+def _normalize_config_hash(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if len(text) != 64:
+        return None
+    if any(char not in "0123456789abcdef" for char in text):
+        return None
+    return text
 
 
 def _contains_forbidden_tokens(value: str) -> bool:
@@ -400,6 +428,14 @@ def record_anomalies(
         )
         if not ok:
             return False, f"Anomaly auth failed: {message}"
+        policy_version_raw = anomaly.get("policy_version")
+        policy_version = _normalize_policy_version(policy_version_raw)
+        if policy_version_raw is not None and policy_version is None:
+            return False, "policy_version must be a short string"
+        config_hash_raw = anomaly.get("config_hash")
+        config_hash = _normalize_config_hash(config_hash_raw)
+        if config_hash_raw is not None and config_hash is None:
+            return False, "config_hash must be a 64-hex sha256 string"
         details = anomaly.get("details")
         parsed_details = details
         if isinstance(details, str):
@@ -442,6 +478,8 @@ def record_anomalies(
                 "decision_risk_score": decision_risk_score,
                 "trigger_signal": trigger_signal,
                 "trust_logic_version": anomaly.get("trust_logic_version"),
+                "policy_version": policy_version,
+                "config_hash": config_hash,
                 "code_fingerprint": anomaly.get("code_fingerprint"),
                 "prompt_type": anomaly.get("prompt_type"),
                 "response_hash": anomaly.get("response_hash"),
@@ -475,6 +513,8 @@ def record_anomalies(
                 "actual_decision": actual_override,
                 "miss_reason": anomaly.get("miss_reason") or miss_reason,
                 "trust_logic_version": anomaly.get("trust_logic_version"),
+                "policy_version": policy_version,
+                "config_hash": config_hash,
                 "code_fingerprint": anomaly.get("code_fingerprint"),
                 AUTH_TOKEN_ID_FIELD: prepared.get(AUTH_TOKEN_ID_FIELD),
                 AUTH_SIGNATURE_FIELD: prepared.get(AUTH_SIGNATURE_FIELD),

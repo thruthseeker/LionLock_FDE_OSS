@@ -22,6 +22,8 @@ def test_module05_missed_signal_insert_sqlite_memory() -> None:
         "decision_risk_score": 0.3,
         "trigger_signal": "fatigue_risk_index",
         "trust_logic_version": "v1",
+        "policy_version": "GC-0.3.1",
+        "config_hash": "b" * 64,
         "code_fingerprint": "fp",
         "prompt_type": "qa",
         "response_hash": "hash-missed-1",
@@ -36,15 +38,18 @@ def test_module05_missed_signal_insert_sqlite_memory() -> None:
 
     conn = missed_signal_sql._memory_connection()
     row = conn.execute(
-        "SELECT expected_decision, actual_decision, signal_bundle, replay_id "
+        "SELECT expected_decision, actual_decision, signal_bundle, replay_id, "
+        "policy_version, config_hash "
         "FROM missed_signal_events WHERE response_hash=?",
         ("hash-missed-1",),
     ).fetchone()
     assert row is not None
-    expected_decision, actual_decision, signal_bundle, replay_id = row
+    expected_decision, actual_decision, signal_bundle, replay_id, policy_version, config_hash = row
     assert expected_decision == "REFRESH"
     assert actual_decision == "ALLOW"
     assert replay_id == "replay-1"
+    assert policy_version == "GC-0.3.1"
+    assert config_hash == "b" * 64
 
     bundle_payload = json.loads(signal_bundle)
     assert not contains_forbidden_keys(bundle_payload)

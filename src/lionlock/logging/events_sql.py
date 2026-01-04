@@ -28,6 +28,8 @@ EVENTS_COLUMNS = (
     "decision_risk_score",
     "trigger_signal",
     "trust_logic_version",
+    "policy_version",
+    "config_hash",
     "code_fingerprint",
     "prompt_type",
     "response_hash",
@@ -83,6 +85,30 @@ def _normalize_prompt_type(value: Any) -> str:
     return "other"
 
 
+def _normalize_policy_version(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if len(text) > 64:
+        return None
+    return text
+
+
+def _normalize_config_hash(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if len(text) != 64:
+        return None
+    if any(char not in "0123456789abcdef" for char in text):
+        return None
+    return text
+
+
 def _normalize_severity(value: Any, decision_risk_score: float) -> str:
     lowered = str(value or "").strip().lower()
     if lowered in ALLOWED_SEVERITIES:
@@ -135,6 +161,7 @@ def record_gating_event(
     uri_or_dsn: str,
     event: Dict[str, Any],
     schema: str = "public",
+    store_warn_alias: bool = False,
 ) -> tuple[bool, str]:
     if not uri_or_dsn:
         return False, "SQL URI is empty."
@@ -181,10 +208,14 @@ def record_gating_event(
     gating_decision_raw = payload.get("gating_decision")
     if gating_decision_raw is None:
         gating_decision_raw = payload.get("decision")
-    gating_decision = canonical_gating_decision(
-        str(gating_decision_raw) if gating_decision_raw is not None else None
-    )
-    if gating_decision not in ALLOWED_DECISIONS:
+    allowed_decisions = set(ALLOWED_DECISIONS)
+    gating_text = str(gating_decision_raw) if gating_decision_raw is not None else None
+    if store_warn_alias and gating_text is not None and gating_text.strip().upper() == "WARN":
+        gating_decision = "WARN"
+        allowed_decisions.add("WARN")
+    else:
+        gating_decision = canonical_gating_decision(gating_text)
+    if gating_decision not in allowed_decisions:
         missing.append("gating_decision")
 
     decision_risk_score = _safe_float(payload.get("decision_risk_score"))
@@ -200,6 +231,16 @@ def record_gating_event(
     trust_logic_version = str(payload.get("trust_logic_version") or "").strip()
     if not trust_logic_version:
         missing.append("trust_logic_version")
+
+    policy_version_raw = payload.get("policy_version")
+    policy_version = _normalize_policy_version(policy_version_raw)
+    if policy_version_raw is not None and policy_version is None:
+        return False, "policy_version must be a short string"
+
+    config_hash_raw = payload.get("config_hash")
+    config_hash = _normalize_config_hash(config_hash_raw)
+    if config_hash_raw is not None and config_hash is None:
+        return False, "config_hash must be a 64-hex sha256 string"
 
     code_fingerprint = str(payload.get("code_fingerprint") or "").strip()
     if not code_fingerprint:
@@ -236,6 +277,8 @@ def record_gating_event(
         "decision_risk_score": decision_risk_score,
         "trigger_signal": trigger_signal,
         "trust_logic_version": trust_logic_version,
+        "policy_version": policy_version,
+        "config_hash": config_hash,
         "code_fingerprint": code_fingerprint,
         "prompt_type": prompt_type,
         "response_hash": response_hash,

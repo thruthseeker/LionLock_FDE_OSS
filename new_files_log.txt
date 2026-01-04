@@ -1,0 +1,17 @@
+Untracked files as of 2026-01-03T21:17:58Z (git ls-files --others --exclude-standard):
+docs/MODULE_06_REPLAY.md
+docs/trust_overlay_schema.json
+module07_jobcard.json
+new_files_log.txt
+src/lionlock/replay/cli.py
+src/lionlock/replay/evaluation_labels.py
+src/lionlock/replay/__init__.py
+src/lionlock/replay/policy_registry.py
+src/lionlock/replay/replay_engine.py
+src/lionlock/replay/reporting.py
+src/lionlock/replay/sql_reader.py
+tests/test_module06_labels_join.py
+tests/test_module06_policy_registry.py
+tests/test_module06_replay_determinism.py
+tests/test_module06_security_checks.py
+tests/test_module06_writeback_optin.py

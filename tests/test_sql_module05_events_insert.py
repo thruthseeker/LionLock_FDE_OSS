@@ -23,6 +23,8 @@ def test_module05_events_insert_sqlite_memory() -> None:
         "decision_risk_score": 0.3,
         "trigger_signal": "fatigue_risk_index",
         "trust_logic_version": "v1",
+        "policy_version": "GC-0.3.1",
+        "config_hash": "a" * 64,
         "code_fingerprint": "fp",
         "prompt_type": "qa",
         "response_hash": "hash-events-1",
@@ -35,13 +37,16 @@ def test_module05_events_insert_sqlite_memory() -> None:
 
     conn = events_sql._memory_connection()
     row = conn.execute(
-        "SELECT gating_decision, signal_bundle, replay_id FROM events WHERE response_hash=?",
+        "SELECT gating_decision, signal_bundle, replay_id, policy_version, config_hash "
+        "FROM events WHERE response_hash=?",
         ("hash-events-1",),
     ).fetchone()
     assert row is not None
-    gating_decision, signal_bundle, replay_id = row
+    gating_decision, signal_bundle, replay_id, policy_version, config_hash = row
     assert gating_decision == "REFRESH"
     assert replay_id == "replay-1"
+    assert policy_version == "GC-0.3.1"
+    assert config_hash == "a" * 64
 
     bundle_payload = json.loads(signal_bundle)
     assert not contains_forbidden_keys(bundle_payload)

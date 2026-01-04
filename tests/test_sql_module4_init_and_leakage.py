@@ -17,6 +17,8 @@ MANDATORY_FIELDS = (
     "decision_risk_score",
     "trigger_signal",
     "trust_logic_version",
+    "policy_version",
+    "config_hash",
     "code_fingerprint",
     "prompt_type",
     "response_hash",
