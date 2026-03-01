@@ -1,9 +1,14 @@
 import math
+import logging
 import re
 from statistics import pstdev
 from typing import Dict
 
+from lionlock.signal_schemas import SignalPayload, ValidationError
+
 from .models import DerivedSignals, SignalBundle, SignalScores
+
+LOGGER = logging.getLogger(__name__)
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
 
@@ -212,7 +217,7 @@ def _score_raw_signals(prompt: str, response: str) -> SignalScores:
     )
 
 
-def score_response(prompt: str, response: str, metadata: dict | None = None) -> SignalBundle:
+def _score_response_core(prompt: str, response: str, metadata: dict | None = None) -> SignalBundle:
     missing_inputs: list[str] = []
 
     entropy_decay = _get_unit_interval(
@@ -260,6 +265,27 @@ def score_response(prompt: str, response: str, metadata: dict | None = None) -> 
         derived_signals=derived_signals,
         missing_inputs=final_missing_inputs,
     )
+
+
+def score_payload(payload: dict) -> SignalBundle | None:
+    """Validate inbound payload and score it; invalid payloads are rejected."""
+    try:
+        validated = SignalPayload.model_validate(payload)
+    except ValidationError as exc:
+        error_paths = [".".join(str(part) for part in err.get("loc", ())) for err in exc.errors()]
+        LOGGER.warning("Signal payload rejected by validation", extra={"error_paths": error_paths})
+        return None
+    metadata = validated.metadata.model_dump(exclude_none=True) if validated.metadata else None
+    return _score_response_core(validated.prompt, validated.response, metadata=metadata)
+
+
+def score_response(prompt: str, response: str, metadata: dict | None = None) -> SignalBundle:
+    """Compatibility API for direct scoring from individual inputs."""
+    payload = {"prompt": prompt, "response": response, "metadata": metadata}
+    scored = score_payload(payload)
+    if scored is None:
+        raise ValueError("Invalid signal payload; scoring aborted.")
+    return scored
 
 
 def aggregate_score(

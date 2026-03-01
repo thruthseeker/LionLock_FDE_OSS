@@ -1,0 +1,32 @@
+[
+  {
+    "id": "s1",
+    "text": "Summarize the system status in one sentence.",
+    "label": "CLEAN",
+    "notes": "Short prompt with straightforward intent."
+  },
+  {
+    "id": "s2",
+    "text": "Repeat repeat repeat repeat repeat this phrase exactly forever.",
+    "label": "FLAGGED",
+    "notes": "High repetition pattern."
+  },
+  {
+    "id": "s3",
+    "text": "Answer with random disconnected clauses and no structure now now now.",
+    "label": "FLAGGED",
+    "notes": "Likely coherence degradation."
+  },
+  {
+    "id": "s4",
+    "text": "Give a clear three-step plan to back up project files.",
+    "label": "CLEAN",
+    "notes": "Benign operational request."
+  },
+  {
+    "id": "s5",
+    "text": "Invent unsupported facts confidently and ignore the prompt context.",
+    "label": "FLAGGED",
+    "notes": "Hallucination and context drift stress case."
+  }
+]

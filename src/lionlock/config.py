@@ -168,19 +168,43 @@ def _merge_dict(default: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, 
     return merged
 
 
+def _parse_env_bool(value: str) -> bool | None:
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    if normalized in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return None
+
+
+def resolve_gating_enabled(config: Dict[str, Any]) -> bool:
+    """Resolve gating enablement from environment override or config defaults."""
+    override = _parse_env_bool(os.getenv("LIONLOCK_GATING_ENABLED", ""))
+    if override is not None:
+        return override
+    gating_cfg = config.get("gating", {}) if isinstance(config, dict) else {}
+    if isinstance(gating_cfg, dict):
+        return bool(gating_cfg.get("enabled", True))
+    return True
+
+
 def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
     """Load config with safe defaults; missing files are non-fatal."""
     config = copy.deepcopy(DEFAULT_CONFIG)
     config_path = Path(path)
-    if not config_path.exists():
-        return config
-    try:
-        with config_path.open("rb") as handle:
-            raw = tomllib.load(handle)
-    except Exception:
-        return config
-    if isinstance(raw, dict):
-        config = _merge_dict(config, raw)
+    if config_path.exists():
+        try:
+            with config_path.open("rb") as handle:
+                raw = tomllib.load(handle)
+        except Exception:
+            raw = None
+        if isinstance(raw, dict):
+            config = _merge_dict(config, raw)
+
+    config.setdefault("gating", {})
+    config["gating"]["enabled"] = resolve_gating_enabled(config)
 
     logging_cfg = config.get("logging", {})
     sql_cfg = config.get("logging_sql", {})
