@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Tuple
 
+from lionlock import config as lionlock_config
 from lionlock.core import gating as gating_module
 from lionlock.core.models import DerivedSignals, SignalBundle, SignalScores, canonical_gating_decision
 from lionlock.core.scoring import aggregate_score
@@ -107,6 +108,7 @@ def _evaluate_with_policy(bundle: SignalBundle, policy: PolicyBundle) -> Any:
     if isinstance(gating_cfg, dict):
         gating_enabled = bool(gating_cfg.get("enabled", True))
         hallucination_mode = str(gating_cfg.get("hallucination_mode") or "warn_only")
+    gating_enabled = lionlock_config.resolve_gating_enabled(policy.config)
     weights = signals_cfg.get("weights") if isinstance(signals_cfg, dict) else None
     enabled_signals = signals_cfg.get("enabled") if isinstance(signals_cfg, dict) else None
     if not isinstance(weights, dict):

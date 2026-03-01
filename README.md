@@ -23,7 +23,7 @@ Detects hallucination markers, entropy spikes, and output degradation over time.
 Backed by PostgreSQL. Supports opt-in logging, test flags, and downstream replay.
 
 ### ✅ Module 05 – Gating Core & Policy Engine
-Interrupts output in real time if trust drops below configured thresholds.
+Computes deterministic gate decisions from trust signals; enforcement vs log-only behavior is controlled by `gating.enabled` / `LIONLOCK_GATING_ENABLED`.
 
 ### ✅ Module 06 – Replay Evaluation Layer
 Processes saved sessions to check missed signals, drift accumulation, and gate performance.

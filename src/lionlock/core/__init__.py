@@ -14,7 +14,7 @@ from .models import (
     SignalScores,
     canonical_gating_decision,
 )
-from .scoring import DEFAULT_SIGNAL_WEIGHTS, aggregate_score, score_response
+from .scoring import DEFAULT_SIGNAL_WEIGHTS, aggregate_score, score_payload, score_response
 
 __all__ = [
     "DEFAULT_HARD_GATE_REASONS",
@@ -28,6 +28,7 @@ __all__ = [
     "aggregate_score",
     "decide_gate",
     "evaluate_policy",
+    "score_payload",
     "score_response",
     "severity_band",
 ]
