@@ -59,3 +59,8 @@ def test_resolve_gating_enabled_env_override(monkeypatch) -> None:
 
     monkeypatch.delenv("LIONLOCK_GATING_ENABLED", raising=False)
     assert resolve_gating_enabled({"gating": {"enabled": False}}) is False
+
+
+def test_default_logging_sql_token_is_empty() -> None:
+    config = load_config(path="missing-does-not-exist.toml")
+    assert config["logging_sql"]["token"] == ""

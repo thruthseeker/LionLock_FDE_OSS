@@ -1,7 +1,7 @@
 # Usage
 
 ## Local Development
-- Create an environment outside the repo (see `VENV_REDIRECT_POLICY.yaml.md`):
+- Create an environment outside the repo (see `docs/internal/VENV_REDIRECT_POLICY.yaml.md`):
   `python -m venv /home/master/Desktop/lionlock_artifacts/publicrepo_LionLock_FDE/.venv && source /home/master/Desktop/lionlock_artifacts/publicrepo_LionLock_FDE/.venv/bin/activate`
 - Install the package with dev tools: `pip install -e .[dev]`
 
@@ -36,3 +36,9 @@ logger.close()
 
 ## Archived Assets
 FastAPI, React, and docker-compose prototypes now live in `archive/experimental/`. They are not part of the supported OSS surface but remain available for reference.
+
+
+## Audit logging
+- Canonical tamper-evident audit stream: `TrustVaultLogger` (see `docs/AUDIT_LOGGING.md`).
+- Verify chain integrity with `TrustVaultLogger.verify_chain()`.
+- Public JSONL/SQL telemetry in `lionlock.logging.event_log` is non-canonical analytics output.

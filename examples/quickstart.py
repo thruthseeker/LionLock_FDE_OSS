@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from lionlock.config import load_config
+from lionlock.config import load_config, resolve_gating_enabled
 from lionlock.core.gating import evaluate_policy
 from lionlock.core.scoring import score_payload
 from lionlock.logging.event_log import build_signal_event, config_hash_from, log_event
@@ -30,6 +30,7 @@ def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
     config = load_config()
     config["logging"]["backend"] = "jsonl"
     config["logging_sql"]["enabled"] = False
+    gating_enabled = resolve_gating_enabled(config)
     records = load_fixture_sessions(path)
 
     flagged = 0
@@ -42,7 +43,7 @@ def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
         bundle = score_payload(payload)
         if bundle is None:
             continue
-        decision = evaluate_policy(bundle, gating_enabled=bool(config["gating"]["enabled"]))
+        decision = evaluate_policy(bundle, gating_enabled=gating_enabled)
 
         if decision.gating_decision in {"REFRESH", "BLOCK"}:
             flagged += 1
@@ -81,7 +82,9 @@ def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
         )
         append_trust_record(trust_record, config=config)
 
+    mode = "active-gating" if gating_enabled else "log-only"
     summary = {"FLAGGED": flagged, "CLEAN": clean}
+    print(f"Quickstart mode: {mode}")
     print(f"Quickstart summary: FLAGGED={flagged} CLEAN={clean}")
     return summary
 

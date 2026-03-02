@@ -25,3 +25,10 @@ Whether that decision is **enforced** or treated as **log-only** is controlled b
 ## Important runtime note
 
 The OSS library returns a `GateDecision` object. Real-time interruption depends on the caller honoring `GateDecision.gating_decision`.
+
+## Config templates
+
+- TOML template: [`lionlock.toml.example`](../lionlock.toml.example)
+- Env template: [`.env.example`](../.env.example)
+
+Copy these into your local runtime files (`lionlock.toml` and `.env`) and adjust as needed.
