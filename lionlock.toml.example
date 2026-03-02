@@ -1,0 +1,18 @@
+[gating]
+# Default behavior: enforce gating decisions.
+enabled = true
+
+[logging]
+# Default OSS logging surface is local JSONL.
+backend = "jsonl"
+path = "logs/lionlock_events.jsonl"
+
+[logging_sql]
+# SQL sink is opt-in.
+enabled = false
+token = ""
+uri = ""
+
+# Environment override:
+#   LIONLOCK_GATING_ENABLED=true|false
+# when set, it overrides [gating].enabled.

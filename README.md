@@ -2,7 +2,7 @@
 
 **LionLock_FDE** is a modular **Fatigue Detection Engine** and **Trust Telemetry System** for LLMs.
 
-It’s designed to detect signal drift, block hallucinated output, and log behavioral metadata to a secure, token-authenticated PostgreSQL backend — **out of the box**.
+It’s designed to detect signal drift, compute deterministic gate decisions, and log behavioral metadata for downstream analysis.
 
 This is the **Open Source Public Preview** of LionLock, suitable for developers, researchers, and AI safety teams. No premium modules or proprietary datasets are included.
 
@@ -11,7 +11,7 @@ This is the **Open Source Public Preview** of LionLock, suitable for developers,
 ## 🔍 Modules Included
 
 ### ✅ Module 01 – Trust Overlay
-Captures inbound signal data. Sends telemetry to PostgreSQL using a **token-based login system**. Auto-connects on launch — no setup needed.
+Captures inbound signal data and emits trust records for analysis. Trust Overlay supports SQL sinks when configured; default behavior uses local file/JSONL logging.
 
 ### ✅ Module 02 – Signal Scoring Engine
 Normalizes session signals. Flags low-confidence or inconsistent prompt structure.
@@ -20,7 +20,7 @@ Normalizes session signals. Flags low-confidence or inconsistent prompt structur
 Detects hallucination markers, entropy spikes, and output degradation over time.
 
 ### ✅ Module 04 – SQL Telemetry Logging
-Backed by PostgreSQL. Supports opt-in logging, test flags, and downstream replay.
+Supports SQL-backed telemetry when explicitly enabled in config.
 
 ### ✅ Module 05 – Gating Core & Policy Engine
 Computes deterministic gate decisions from trust signals; enforcement vs log-only behavior is controlled by `gating.enabled` / `LIONLOCK_GATING_ENABLED`.
@@ -36,6 +36,12 @@ Stress-tests policies across multiple profiles and gating thresholds.
 ## 🚀 Get Started
 
 ```bash
-git clone https://github.com/truthseeker/LionLock_FDE_OSS.git
+git clone https://github.com/thruthseeker/LionLock_FDE_OSS.git
 cd LionLock_FDE_OSS
 bash tools/dev_setup.sh
+```
+
+
+Config templates: [`lionlock.toml.example`](lionlock.toml.example) and [`.env.example`](.env.example).
+
+Audit log details: [`docs/AUDIT_LOGGING.md`](docs/AUDIT_LOGGING.md).

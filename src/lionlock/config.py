@@ -79,7 +79,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "logging": {
         "enabled": True,
-        "backend": "sql",
+        "backend": "jsonl",
         "path": "logs/lionlock_events.jsonl",
         "verbosity": "normal",
         "retention_events": 2000,
@@ -88,8 +88,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "notes_max_length": 120,
     },
     "logging_sql": {
-        "enabled": True,
-        "token": "DO_MY_SECRET_TOKEN",
+        "enabled": False,
+        "token": "",
         "uri": "",
         "table": "lionlock_signals",
         "batch_size": 50,
@@ -223,7 +223,7 @@ def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
         sql_cfg["uri"] = telemetry_db_uri
         sql_cfg["token"] = telemetry_db_uri
         sql_cfg["enabled"] = True
-    backend = str(logging_cfg.get("backend") or "sql").lower()
+    backend = str(logging_cfg.get("backend") or "jsonl").lower()
     if sql_cfg.get("enabled") and backend not in {"sql", "both"}:
         raise RuntimeError("SQL telemetry requires logging.backend to be 'sql' or 'both'.")
     if sql_cfg.get("enabled") and not str(sql_cfg.get("token", "")).strip():

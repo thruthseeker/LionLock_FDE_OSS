@@ -89,16 +89,14 @@ _ALLOWED_TABLES = {
     "lionlock_sessions",
     "lionlock_failsafe",
 }
-DEFAULT_SQL_TELEMETRY_TOKEN = "DO_MY_SECRET_TOKEN"
+DEFAULT_SQL_TELEMETRY_TOKEN = ""
 _SQL_TOKEN_ENV_KEYS = (
     "LIONLOCK_TELEMETRY_TOKEN",
     "LIONLOCK_SQL_TELEMETRY_TOKEN",
     "LIONLOCK_SQL_TOKEN",
 )
 _SQL_URI_ENV_KEYS = ("LIONLOCK_TELEMETRY_DB_URI",)
-_TOKEN_MAP = {
-    DEFAULT_SQL_TELEMETRY_TOKEN: "postgresql://user:pass@host:5432/dbname",
-}
+_TOKEN_MAP = {}
 _ALLOWED_SCHEMES = ("postgres", "postgresql", "sqlite")
 
 
