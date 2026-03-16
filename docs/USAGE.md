@@ -2,7 +2,10 @@
 
 ## Local Development
 - Create an environment outside the repo (see `docs/internal/VENV_REDIRECT_POLICY.yaml.md`):
-  `python -m venv /home/master/Desktop/lionlock_artifacts/publicrepo_LionLock_FDE/.venv && source /home/master/Desktop/lionlock_artifacts/publicrepo_LionLock_FDE/.venv/bin/activate`
+  ```bash
+  python -m venv ~/.lionlock_env && source ~/.lionlock_env/bin/activate
+  ```
+  Or use your preferred venv location (e.g., `$HOME/.venv` or `/tmp/lionlock_venv`):
 - Install the package with dev tools: `pip install -e .[dev]`
 
 ## Logging
