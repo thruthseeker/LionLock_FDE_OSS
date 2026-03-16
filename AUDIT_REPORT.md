@@ -24,7 +24,7 @@ LionLock FDE OSS is a well-structured, security-conscious Python library for sig
 
 ## 1. Directory Structure
 
-```
+```text
 LionLock_FDE_OSS/
 ├── src/lionlock/
 │   ├── core/             # Gating & scoring engine (615 LOC)
