@@ -2,7 +2,12 @@
 
 **Audit Date**: 2026-03-14
 **Auditor**: Claude Code (Automated Security & Quality Analysis)
-**Overall Risk Level**: LOW — Approved for production use
+**Audit Scope**: Full source code review (~9,080 LOC), dependency analysis, threat model coverage, CI/CD tooling
+**Artifacts Reviewed**: All source files, tests, configuration, and documentation
+**Audit Boundaries**: Code-level security analysis; out-of-scope: network TLS, database hardening, operational infrastructure, key management at runtime
+**Overall Risk Level**: LOW — Approved for production use, provided operators implement standard deployment hardening practices
+
+> ⚠️ **Important**: This approval assumes operators follow security hardening guidance (Section 11 & 198) for environment variables, database access, TLS configuration, and ongoing dependency scanning via `pip-audit`.
 
 ---
 
@@ -19,7 +24,7 @@ LionLock FDE OSS is a well-structured, security-conscious Python library for sig
 
 ## 1. Directory Structure
 
-```
+```text
 LionLock_FDE_OSS/
 ├── src/lionlock/
 │   ├── core/             # Gating & scoring engine (615 LOC)
@@ -184,7 +189,7 @@ No security vulnerabilities require immediate remediation.
 
 ## 9. Conclusion
 
-**Overall Risk Level: LOW — Approved for production use**
+**Overall Risk Level: LOW — Approved for production use (with operator hardening responsibility)**
 
 The LionLock FDE OSS codebase demonstrates exemplary security engineering for an open-source LLM safety library:
 
@@ -194,5 +199,14 @@ The LionLock FDE OSS codebase demonstrates exemplary security engineering for an
 - Privacy-by-design approach
 - Tamper-evident logging infrastructure
 - Strong test coverage and CI tooling
+
+### Operator Responsibilities
+This approval is scoped to code-level security. **Operators must implement**:
+1. **Environment hardening**: Protect `LIONLOCK_*` env vars, Fernet keys, and SQL tokens
+2. **Database security**: Restrict PostgreSQL/SQLite file access; enable row-level security if applicable
+3. **Network security**: Enable TLS for all database connections; validate certificates
+4. **Key rotation**: Rotate Fernet encryption keys on a defined schedule (see Section 11: Recommendations)
+5. **Monitoring**: Run `bash tools/security_audit.sh` quarterly; subscribe to Python security advisories
+6. **Log management**: Archive audit logs regularly; verify SHA256 chain integrity periodically via `TrustVaultLogger.verify_chain()`
 
 Standard operational security practices apply: protect environment variables, secure the database, enable TLS at the network layer, and run regular `pip-audit` scans.
