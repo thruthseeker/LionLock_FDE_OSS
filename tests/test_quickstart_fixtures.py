@@ -39,6 +39,7 @@ def test_quickstart_uses_env_gating_override(monkeypatch) -> None:
         reason_code = None
         decision_risk_score = 0.1
         signal_scores = {}
+        signal_bundle = None
 
     seen: list[bool] = []
 

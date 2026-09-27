@@ -4,9 +4,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Set
 
 from . import sql_telemetry
-from .privacy import scrub_forbidden_keys
+from .privacy import find_forbidden_content, scrub_forbidden_keys
 from .token_auth import AUTH_SIGNATURE_FIELD, AUTH_TOKEN_ID_FIELD
 from lionlock.core.models import canonical_gating_decision
+from lionlock.telemetry.store import open_store
 
 
 def _serialize(obj: Dict[str, Any]) -> str:
@@ -41,6 +42,7 @@ PUBLIC_EVENT_FIELDS = {
     "config_hash",
     "duration_ms",
     "notes",
+    "signal_bundle",
     AUTH_TOKEN_ID_FIELD,
     AUTH_SIGNATURE_FIELD,
 }
@@ -100,6 +102,17 @@ def _sanitize_notes(
     return sanitized or None
 
 
+def _sanitize_signal_bundle(bundle: Any) -> Optional[Dict[str, Any]]:
+    if hasattr(bundle, "as_dict"):
+        bundle = bundle.as_dict()
+    if not isinstance(bundle, dict):
+        return None
+    ok, cleaned, _ = scrub_forbidden_keys(bundle, mode="reject")
+    if not ok or not isinstance(cleaned, dict) or find_forbidden_content(cleaned):
+        return None
+    return cleaned
+
+
 def sanitize_public_event(
     event: Dict[str, Any],
     verbosity: str = "normal",
@@ -138,6 +151,11 @@ def sanitize_public_event(
                 continue
             sanitized[key] = cleaned
             continue
+        if key == "signal_bundle":
+            bundle = _sanitize_signal_bundle(event.get("signal_bundle"))
+            if bundle is not None:
+                sanitized[key] = bundle
+            continue
         sanitized[key] = event[key]
     return sanitized
 
@@ -156,6 +174,7 @@ def build_signal_event(
     duration_ms: int | None,
     config_hash: str,
     notes: Dict[str, Any] | None = None,
+    signal_bundle: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     event = {
         "timestamp_utc": timestamp_utc,
@@ -172,6 +191,8 @@ def build_signal_event(
     }
     if notes:
         event["notes"] = notes
+    if signal_bundle:
+        event["signal_bundle"] = signal_bundle
     return event
 
 
@@ -252,6 +273,9 @@ def log_event(event: Dict[str, Any], config: Dict[str, Any]) -> None:
 
     if sql_enabled and backend in {"sql", "both"}:
         sql_telemetry.enqueue_event(sql_cfg, record, session_pk=session_pk)
+
+    if backend == "sqlite":
+        open_store(config).append_event(record)
 
     if backend in ("jsonl", "both"):
         path = logging_cfg.get("path", "logs/lionlock_events.jsonl")

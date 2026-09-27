@@ -44,6 +44,10 @@ Failsafe encryption uses Fernet (AES-128 CBC mode from the `cryptography` librar
   4. Notify your security team and review access logs for unauthorized access to the key.
 - Fernet provides built-in timestamp verification; all encrypted data includes a timestamp.
 
+## Telemetry
+- Logging is local by default (`logs/lionlock.db`); uploads are opt-in and disabled by `DO_NOT_TRACK=1`.
+- Uploads contain only the allowlisted fields in [TELEMETRY.md](TELEMETRY.md); the receiver re-applies the same policy and treats every snapshot as untrusted input.
+
 ## Privacy Trade-offs (OSS)
 - Key-based scrubbing blocks known prompt/response field names.
 - Value-based scanning rejects obvious markers (e.g., `prompt:` / `response=`) and large free-text strings.

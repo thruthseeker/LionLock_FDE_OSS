@@ -40,6 +40,7 @@ failsafe = [
 
 [project.scripts]
 lionlock-sim = "lionlock.sim.cli:main"
+lionlock-telemetry = "lionlock.telemetry.cli:main"
 [tool.setuptools]
 package-dir = { "" = "src" }
 

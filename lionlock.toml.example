@@ -3,9 +3,28 @@
 enabled = true
 
 [logging]
-# Default OSS logging surface is local JSONL.
-backend = "jsonl"
+# Default OSS logging surface is a single local SQLite file. It never leaves this machine
+# unless you opt in to uploads below. Other backends: "jsonl", "sql", "both", "off".
+backend = "sqlite"
+sqlite_path = "logs/lionlock.db"
+# Oldest rows beyond this count are pruned (the hash chain stays verifiable).
+sqlite_max_rows = 100000
+# Used by the "jsonl" and "both" backends.
 path = "logs/lionlock_events.jsonl"
+
+[telemetry_upload]
+# Opt-in. When enabled, only allowlisted, re-keyed fields are uploaded, as sealed snapshot
+# files you can inspect first with `lionlock-telemetry export` and `lionlock-telemetry inspect`.
+# See docs/TELEMETRY.md for the full data dictionary.
+enabled = false
+# HTTPS endpoint running a LionLock receiver (plain http is accepted only for localhost).
+endpoint = ""
+# Optional bearer token, read from this environment variable or file (never put it here).
+token_env = "LIONLOCK_UPLOAD_TOKEN"
+token_path = ""
+# Optional CA bundle for a privately issued server certificate.
+ca_file = ""
+interval_hours = 24
 
 [logging_sql]
 # SQL sink is opt-in.
@@ -13,6 +32,8 @@ enabled = false
 token = ""
 uri = ""
 
-# Environment override:
-#   LIONLOCK_GATING_ENABLED=true|false
-# when set, it overrides [gating].enabled.
+# Environment overrides:
+#   LIONLOCK_GATING_ENABLED=true|false     overrides [gating].enabled
+#   LIONLOCK_TELEMETRY_UPLOAD=on|off       overrides [telemetry_upload].enabled
+#   LIONLOCK_TELEMETRY_ENDPOINT=https://…  overrides [telemetry_upload].endpoint
+#   DO_NOT_TRACK=1                          disables uploads regardless of any other setting

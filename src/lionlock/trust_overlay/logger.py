@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, cast
 
+from lionlock.telemetry.store import open_store, sqlite_logging_enabled
 from lionlock.versioning import get_lionlock_version
 
 from .config import (
@@ -250,6 +251,8 @@ def append_trust_record(
     with path.open("a", encoding="utf-8") as handle:
         handle.write(_serialize(sanitized) + "\n")
     if config:
+        if sqlite_logging_enabled(config):
+            open_store(config).append_trust_record(sanitized)
         sql_cfg = resolve_trust_overlay_sql_config(config)
         try:
             enqueue_sql_record(sql_cfg, sanitized)
