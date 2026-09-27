@@ -271,6 +271,16 @@ Each bundle records its `signal_schema_version`. Bundles from before `SE-0.3.0` 
 high risk. When replaying older data, filter on the version, or recompute that field from the
 stored signal scores with `lionlock.core.scoring.low_conf_halluc_score`.
 
+`SE-0.4.0` changed no numbers. Every derived value it produces is identical to `SE-0.3.0` for the
+same inputs, and the signal weights, thresholds and fatigue constants are unchanged. The only
+difference is that `fatigue_risk_index` no longer participates in gating when any of
+`entropy_decay`, `turn_index` or `drift_slope` is listed in `missing_inputs`; it is still recorded
+in every bundle. Two consequences for replay: bundles from `SE-0.3.0` and `SE-0.4.0` can be pooled
+for any analysis of the stored values, but a replay that recomputes decisions across the boundary
+may see `trigger_signal` and `reason_code` change for rows whose fatigue inputs were absent. The
+fatigue score itself is uncalibrated — see the note on `FATIGUE_SIGMOID_GAIN` in
+`lionlock/core/scoring.py` — so it should not be treated as a risk probability in either version.
+
 ### Deletion requests
 
 `lionlock-telemetry status` shows an install's `install_id`. To delete everything uploaded under

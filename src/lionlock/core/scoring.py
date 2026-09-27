@@ -12,9 +12,12 @@ LOGGER = logging.getLogger(__name__)
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
 
+# SE-0.4.0: fatigue_risk_index is documented as UNCALIBRATED and is excluded from the gating
+# channel whenever any of its inputs is absent. No derived value changed; see FATIGUE_INPUT_KEYS in
+# gating.py and the replay note in docs/TELEMETRY.md.
 # SE-0.3.0: low_conf_halluc rises with hallucination_risk. SE-0.2.0 bundles computed it from
 # 1 - hallucination_risk, which scored grounded answers as high risk.
-SIGNAL_SCHEMA_VERSION = "SE-0.3.0"
+SIGNAL_SCHEMA_VERSION = "SE-0.4.0"
 
 DEFAULT_SIGNAL_WEIGHTS: Dict[str, float] = {
     "repetition_loopiness": 0.30,
@@ -24,6 +27,26 @@ DEFAULT_SIGNAL_WEIGHTS: Dict[str, float] = {
     "hallucination_risk": 0.00,
 }
 
+# UNCALIBRATED. These constants are not fitted to observed data and must not be read as a
+# calibrated risk probability. With a weighted input confined to [0, 1], the sigmoid below spans
+# only [0.0025, 0.1192], which sits under the yellow band (0.45), so fatigue cannot raise a
+# severity band on its own. That is deliberate as of SE-0.4.0 rather than incidental: the two
+# metadata inputs (entropy_decay, drift_slope) have no definition in this repo, so a caller that
+# supplies nothing would otherwise be gated on an all-defaults score. gating.py drops
+# fatigue_risk_index from the decision channel whenever any fatigue input is missing.
+#
+# Calibration was attempted against real per-token telemetry and abandoned because that data
+# cannot support it. This is a statement about the available data, not a claim that a fatigue
+# signal is unworkable in principle. The evidence: entropy collapse is normal in healthy greedy
+# decoding (relative collapse p95 0.989 on clean responses), loop and runaway failures move the
+# entropy features in opposite directions so one scalar cannot carry both, and no threshold
+# reached usable recall at a 1% false-positive target. A threshold fitted to 1% false positives on
+# one telemetry store produced 25-81% false positives on another store from the same model at the
+# same sampling temperature, and the second store contained no failure cases at all, so recall was
+# not measurable in the other direction. Raising the gain to make the range reach yellow measured
+# 2.23-3.34% false positives at 0.00% true positives. Do not retune these without per-token
+# telemetry that includes multi-turn sessions, genuine per-token timing, a fixed sampling
+# temperature, and task-level outcome labels.
 FATIGUE_SIGMOID_GAIN = 4.0
 FATIGUE_SIGMOID_BIAS = 1.5
 FATIGUE_WEIGHTS = {

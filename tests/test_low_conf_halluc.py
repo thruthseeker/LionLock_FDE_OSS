@@ -137,7 +137,10 @@ def test_quickstart_summary_matches_fixture_labels(tmp_path: Path, monkeypatch) 
 
 
 def test_signal_schema_version_marks_the_fixed_formula() -> None:
-    assert SIGNAL_SCHEMA_VERSION == "SE-0.3.0"
-    assert score_response("alpha beta", "alpha beta").signal_schema_version == "SE-0.3.0"
+    # One pinned literal, so any future schema change has to touch a test deliberately. The
+    # plumbing assertions below compare against the constant instead of repeating the literal.
+    assert SIGNAL_SCHEMA_VERSION == "SE-0.4.0"
+    bundle = score_response("alpha beta", "alpha beta")
+    assert bundle.signal_schema_version == SIGNAL_SCHEMA_VERSION
     gate = decide_gate(0.1, _scores())
-    assert gate.signal_bundle["signal_schema_version"] == "SE-0.3.0"
+    assert gate.signal_bundle["signal_schema_version"] == SIGNAL_SCHEMA_VERSION
