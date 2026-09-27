@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import atexit
 import json
-import queue
 import sqlite3
 import threading
-import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
@@ -13,6 +13,13 @@ try:
 except Exception:
     create_engine = None  # type: ignore[assignment]
     text = None  # type: ignore[assignment]
+
+from lionlock.utils.sql_batch_writer import (
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_RETRY_BACKOFF_MS,
+    DEFAULT_STOP_TIMEOUT_S,
+    SQLBatchWriter,
+)
 
 TRUST_OVERLAY_COLUMNS: List[Tuple[str, str]] = [
     ("timestamp", "TEXT"),
@@ -36,6 +43,7 @@ TRUST_OVERLAY_COLUMNS: List[Tuple[str, str]] = [
 
 _WRITER: "TrustOverlaySQLWriter | None" = None
 _WRITER_KEY: Tuple[Any, ...] | None = None
+_WRITER_LOCK = threading.Lock()
 
 
 def _serialize(value: Any) -> str:
@@ -177,7 +185,11 @@ def _record_to_named_row(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-class TrustOverlaySQLWriter:
+class TrustOverlaySQLWriter(SQLBatchWriter):
+    """Batched SQL writer for trust overlay records; delivery policy in SQLBatchWriter."""
+
+    sink_name = "trust_overlay_sql"
+
     def __init__(
         self,
         *,
@@ -188,21 +200,22 @@ class TrustOverlaySQLWriter:
         batch_size: int,
         flush_interval_ms: int,
         connect_timeout_s: int,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_backoff_ms: int = DEFAULT_RETRY_BACKOFF_MS,
+        stop_timeout_s: float = DEFAULT_STOP_TIMEOUT_S,
     ) -> None:
+        super().__init__(
+            batch_size=batch_size,
+            flush_interval_ms=flush_interval_ms,
+            max_retries=max_retries,
+            retry_backoff_ms=retry_backoff_ms,
+            stop_timeout_s=stop_timeout_s,
+        )
         self.backend = _normalize_backend(backend)
         self.dsn = dsn
         self.sqlite_path = sqlite_path
         self.table = table
-        self.batch_size = max(1, batch_size)
-        self.flush_interval = max(10, flush_interval_ms) / 1000.0
         self.connect_timeout_s = max(1, connect_timeout_s)
-        self.queue: "queue.Queue[Dict[str, Any]]" = queue.Queue(
-            maxsize=max(100, self.batch_size * 10)
-        )
-        self.stop_event = threading.Event()
-        self.available = True
-        self.error: str | None = None
-        self.engine: Any = None
 
         if self.backend == "sqlite3":
             if not self.sqlite_path:
@@ -221,8 +234,7 @@ class TrustOverlaySQLWriter:
                 self._init_tables()
 
         if self.available:
-            self.thread = threading.Thread(target=self._run, daemon=True)
-            self.thread.start()
+            self._start()
 
     def _init_tables(self) -> None:
         try:
@@ -240,74 +252,23 @@ class TrustOverlaySQLWriter:
             self.available = False
             self.error = f"Trust overlay SQL init failed: {exc}"
 
-    def enqueue(self, record: Dict[str, Any]) -> bool:
-        if not self.available:
-            return False
-        payload = dict(record)
-        try:
-            self.queue.put_nowait(payload)
-        except queue.Full:
-            try:
-                _ = self.queue.get_nowait()
-                self.queue.put_nowait(payload)
-            except Exception:
-                return False
-        return True
-
-    def _run(self) -> None:
-        buffer: List[Dict[str, Any]] = []
-        last_flush = time.monotonic()
-        while not self.stop_event.is_set():
-            timeout = max(0.1, self.flush_interval - (time.monotonic() - last_flush))
-            try:
-                item = self.queue.get(timeout=timeout)
-                buffer.append(item)
-                if len(buffer) >= self.batch_size:
-                    self._flush(buffer)
-                    buffer = []
-                    last_flush = time.monotonic()
-            except queue.Empty:
-                if buffer:
-                    self._flush(buffer)
-                    buffer = []
-                    last_flush = time.monotonic()
-            except Exception as exc:
-                self.error = f"Trust overlay SQL worker error: {exc}"
-        if buffer:
-            self._flush(buffer)
-
-    def _flush(self, buffer: List[Dict[str, Any]]) -> None:
-        if not buffer:
+    def _write_batch(self, records: List[Dict[str, Any]]) -> None:
+        columns = ",".join(name for name, _ in TRUST_OVERLAY_COLUMNS)
+        if self.backend == "sqlite3":
+            assert self.sqlite_path is not None
+            placeholders = ",".join("?" for _ in TRUST_OVERLAY_COLUMNS)
+            sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders})"
+            rows = [_record_to_row(record) for record in records]
+            with closing(sqlite3.connect(self.sqlite_path, timeout=self.connect_timeout_s)) as conn:
+                with conn:  # Commits on success, rolls back on error.
+                    conn.executemany(sql, rows)
             return
-        try:
-            columns = ",".join(name for name, _ in TRUST_OVERLAY_COLUMNS)
-            if self.backend == "sqlite3":
-                assert self.sqlite_path is not None
-                placeholders = ",".join("?" for _ in TRUST_OVERLAY_COLUMNS)
-                sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders})"
-                with sqlite3.connect(
-                    self.sqlite_path, timeout=self.connect_timeout_s
-                ) as conn:
-                    conn.executemany(
-                        sql,
-                        [_record_to_row(record) for record in buffer],
-                    )
-                    conn.commit()
-            else:
-                if self.engine is None or text is None:
-                    raise RuntimeError("SQLAlchemy not installed.")
-                values = ",".join(f":{name}" for name, _ in TRUST_OVERLAY_COLUMNS)
-                stmt = text(f"INSERT INTO {self.table} ({columns}) VALUES ({values})")
-                with self.engine.begin() as conn:
-                    conn.execute(
-                        stmt,
-                        [_record_to_named_row(record) for record in buffer],
-                    )
-        except Exception as exc:
-            self.error = f"Trust overlay SQL insert failed: {exc}"
-
-    def stop(self) -> None:
-        self.stop_event.set()
+        if self.engine is None or text is None:
+            raise RuntimeError("SQLAlchemy not installed.")
+        values = ",".join(f":{name}" for name, _ in TRUST_OVERLAY_COLUMNS)
+        stmt = text(f"INSERT INTO {self.table} ({columns}) VALUES ({values})")
+        with self.engine.begin() as conn:
+            conn.execute(stmt, [_record_to_named_row(record) for record in records])
 
 
 def get_writer(config: Dict[str, Any]) -> TrustOverlaySQLWriter | None:
@@ -317,39 +278,53 @@ def get_writer(config: Dict[str, Any]) -> TrustOverlaySQLWriter | None:
     batch_size = int(config.get("batch_size", 50))
     flush_interval_ms = int(config.get("flush_interval_ms", 1000))
     connect_timeout_s = int(config.get("connect_timeout_s", 5))
+    max_retries = int(config.get("max_retries", DEFAULT_MAX_RETRIES))
+    retry_backoff_ms = int(config.get("retry_backoff_ms", DEFAULT_RETRY_BACKOFF_MS))
+    stop_timeout_s = float(config.get("stop_timeout_s", DEFAULT_STOP_TIMEOUT_S))
 
     if backend == "sqlite3":
         if not sqlite_path or not table:
-            _WRITER = None
-            _WRITER_KEY = None
+            stop_writer()
             return None
     else:
         if not dsn or not table:
-            _WRITER = None
-            _WRITER_KEY = None
+            stop_writer()
             return None
 
-    key = (backend, dsn, sqlite_path, table, batch_size, flush_interval_ms, connect_timeout_s)
-    if _WRITER is not None and _WRITER_KEY != key:
-        _WRITER.stop()
-        _WRITER = None
-        _WRITER_KEY = None
-    if _WRITER is None:
-        _WRITER = TrustOverlaySQLWriter(
-            backend=backend,
-            dsn=dsn,
-            sqlite_path=sqlite_path,
-            table=table,
-            batch_size=batch_size,
-            flush_interval_ms=flush_interval_ms,
-            connect_timeout_s=connect_timeout_s,
-        )
-        _WRITER_KEY = key
-        if not _WRITER.available:
-            return None
-    if _WRITER is not None and not _WRITER.available:
-        return None
-    return _WRITER
+    key = (
+        backend,
+        dsn,
+        sqlite_path,
+        table,
+        batch_size,
+        flush_interval_ms,
+        connect_timeout_s,
+        max_retries,
+        retry_backoff_ms,
+        stop_timeout_s,
+    )
+    with _WRITER_LOCK:
+        if _WRITER is not None and (_WRITER_KEY != key or _WRITER.stop_event.is_set()):
+            # Reconfigured, or stopped by its owner: flush what it still holds.
+            _WRITER.stop()
+            _WRITER = None
+            _WRITER_KEY = None
+        if _WRITER is None:
+            _WRITER = TrustOverlaySQLWriter(
+                backend=backend,
+                dsn=dsn,
+                sqlite_path=sqlite_path,
+                table=table,
+                batch_size=batch_size,
+                flush_interval_ms=flush_interval_ms,
+                connect_timeout_s=connect_timeout_s,
+                max_retries=max_retries,
+                retry_backoff_ms=retry_backoff_ms,
+                stop_timeout_s=stop_timeout_s,
+            )
+            _WRITER_KEY = key
+        # A writer that failed to start stays cached, so init is not retried per record.
+        return _WRITER if _WRITER.available else None
 
 
 def enqueue_record(config: Dict[str, Any], record: Dict[str, Any]) -> bool:
@@ -361,9 +336,26 @@ def enqueue_record(config: Dict[str, Any], record: Dict[str, Any]) -> bool:
     return writer.enqueue(record)
 
 
-def stop_writer() -> None:
+def stop_writer(timeout_s: float | None = None) -> Dict[str, int] | None:
+    """Stop the shared writer, flushing queued records within ``timeout_s`` seconds
+    (default: the writer's ``stop_timeout_s``). Returns its final delivery
+    counters, or None when no writer was running."""
     global _WRITER, _WRITER_KEY
-    if _WRITER is not None:
-        _WRITER.stop()
-    _WRITER = None
-    _WRITER_KEY = None
+    with _WRITER_LOCK:
+        writer = _WRITER
+        _WRITER = None
+        _WRITER_KEY = None
+    if writer is None:
+        return None
+    writer.stop(timeout_s)
+    return writer.stats()
+
+
+def writer_stats() -> Dict[str, int] | None:
+    """Delivery counters of the shared writer, or None when none is running."""
+    writer = _WRITER
+    return writer.stats() if writer is not None else None
+
+
+# Flush records still queued when the interpreter exits (bounded by stop_timeout_s).
+atexit.register(stop_writer)

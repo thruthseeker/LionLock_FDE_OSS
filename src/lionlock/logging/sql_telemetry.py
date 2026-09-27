@@ -1,8 +1,8 @@
+import atexit
 import os
-import queue
 import sqlite3
 import threading
-import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 from urllib.parse import urlparse
@@ -13,9 +13,17 @@ except Exception:
     create_engine = None  # type: ignore[assignment]
     text = None  # type: ignore[assignment]
 
+from lionlock.core.models import canonical_gating_decision
+from lionlock.utils.sql_batch_writer import (
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_RETRY_BACKOFF_MS,
+    DEFAULT_STOP_TIMEOUT_S,
+    SQLBatchWriter,
+)
+
 from .connection import load_dotenv, validate_identifier
 from .token_auth import AUTH_SIGNATURE_FIELD, AUTH_TOKEN_ID_FIELD, prepare_event_for_sql
-from lionlock.core.models import canonical_gating_decision
+
 SESSIONS_COLUMNS: List[Tuple[str, str]] = [
     ("session_pk", "INTEGER PRIMARY KEY AUTOINCREMENT"),
     ("session_id", "TEXT UNIQUE"),
@@ -83,7 +91,7 @@ def _canonicalize_decision(value: Any) -> str:
 
 _WRITER: "SQLTelemetryWriter | None" = None
 _WRITER_KEY: Tuple[Any, ...] | None = None
-_STOP_SENTINEL = object()
+_WRITER_LOCK = threading.Lock()
 _ALLOWED_TABLES = {
     "lionlock_signals",
     "lionlock_sessions",
@@ -161,10 +169,6 @@ def _validate_table_name(name: str, label: str) -> str:
 def _create_table_sql(table: str, columns: Iterable[Tuple[str, str]]) -> str:
     cols = ", ".join(f"{name} {col_type}" for name, col_type in columns)
     return f"CREATE TABLE IF NOT EXISTS {table} ({cols})"
-
-
-def _is_unique_constraint_error(exc: Exception) -> bool:
-    return "unique" in str(exc).lower()
 
 
 def _sqlite_path_from_uri(uri: str) -> str | None:
@@ -350,7 +354,11 @@ def _event_to_named_row(event: Dict[str, Any], session_pk: int | None) -> Dict[s
     }
 
 
-class SQLTelemetryWriter:
+class SQLTelemetryWriter(SQLBatchWriter):
+    """Batched SQL writer for public signal events; delivery policy in SQLBatchWriter."""
+
+    sink_name = "sql_telemetry"
+
     def __init__(
         self,
         uri: str,
@@ -359,37 +367,35 @@ class SQLTelemetryWriter:
         batch_size: int,
         flush_interval_ms: int,
         connect_timeout_s: int,
+        *,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_backoff_ms: int = DEFAULT_RETRY_BACKOFF_MS,
+        stop_timeout_s: float = DEFAULT_STOP_TIMEOUT_S,
     ) -> None:
-        self.uri = uri
-        try:
-            self.table = _validate_table_name(table, "table")
-            self.sessions_table = _validate_table_name(sessions_table, "sessions_table")
-        except ValueError as exc:
-            self.available = False
-            self.error = f"SQL telemetry init failed: {exc}"
-            self.table = table
-            self.sessions_table = sessions_table
-            return
-        self.batch_size = max(1, batch_size)
-        self.flush_interval = max(10, flush_interval_ms) / 1000.0
-        self.connect_timeout_s = max(1, connect_timeout_s)
-        self.queue: "queue.Queue[Any]" = queue.Queue(
-            maxsize=max(100, self.batch_size * 10)
+        super().__init__(
+            batch_size=batch_size,
+            flush_interval_ms=flush_interval_ms,
+            max_retries=max_retries,
+            retry_backoff_ms=retry_backoff_ms,
+            stop_timeout_s=stop_timeout_s,
         )
-        self.stop_event = threading.Event()
-        self.available = True
-        self.error: str | None = None
+        self.uri = uri
+        self.table = table
+        self.sessions_table = sessions_table
+        self.connect_timeout_s = max(1, connect_timeout_s)
         self.sqlite_path = _sqlite_path_from_uri(uri)
-        self.engine: Any = None
-        self.thread: threading.Thread | None = None
-
+        try:
+            _validate_table_name(table, "table")
+            _validate_table_name(sessions_table, "sessions_table")
+        except ValueError as exc:
+            self._disable(f"SQL telemetry init failed: {exc}")
+            return
         if self.sqlite_path is None and (create_engine is None or text is None):
-            self.available = False
-            self.error = "SQLAlchemy not installed; SQL telemetry disabled."
-        else:
-            self._init_tables()
-            self.thread = threading.Thread(target=self._run, daemon=True)
-            self.thread.start()
+            self._disable("SQLAlchemy not installed; SQL telemetry disabled.")
+            return
+        self._init_tables()
+        if self.available:
+            self._start()
 
     def _init_tables(self) -> None:
         try:
@@ -410,115 +416,34 @@ class SQLTelemetryWriter:
             self.available = False
             self.error = f"SQL telemetry init failed: {exc}"
 
-    def enqueue(self, event: Dict[str, Any]) -> bool:
-        if not self.available or self.stop_event.is_set():
-            return False
-        try:
-            self.queue.put_nowait(event)
-        except queue.Full:
-            try:
-                _ = self.queue.get_nowait()
-                self.queue.put_nowait(event)
-            except Exception:
-                return False
-        return True
-
-    def _run(self) -> None:
-        buffer: List[Dict[str, Any]] = []
-        last_flush = time.monotonic()
-        while True:
-            if self.stop_event.is_set():
-                break
-            timeout = max(0.1, self.flush_interval - (time.monotonic() - last_flush))
-            try:
-                item = self.queue.get(timeout=timeout)
-                if item is _STOP_SENTINEL:
-                    break
-                if self.stop_event.is_set():
-                    break
-                if isinstance(item, dict):
-                    buffer.append(item)
-                if len(buffer) >= self.batch_size:
-                    if self.stop_event.is_set():
-                        break
-                    self._flush(buffer)
-                    buffer = []
-                    last_flush = time.monotonic()
-            except queue.Empty:
-                if buffer and not self.stop_event.is_set():
-                    self._flush(buffer)
-                    buffer = []
-                    last_flush = time.monotonic()
-            except Exception as exc:
-                self.error = f"SQL telemetry worker error: {exc}"
-                self.available = False
-        # Drop any remaining buffer on stop to avoid late writes in teardown.
-
-    def _flush(self, buffer: List[Dict[str, Any]]) -> None:
-        if not buffer or self.stop_event.is_set():
+    def _write_batch(self, events: List[Dict[str, Any]]) -> None:
+        columns = ",".join(name for name, _ in PUBLIC_SIGNALS_COLUMNS if name != "event_pk")
+        if self.sqlite_path is not None:
+            placeholders = ",".join("?" for _ in columns.split(","))
+            sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders})"
+            rows = [_event_to_row(event, event.get("session_pk")) for event in events]
+            with closing(sqlite3.connect(self.sqlite_path, timeout=self.connect_timeout_s)) as conn:
+                with conn:  # Commits on success, rolls back on error.
+                    conn.executemany(sql, rows)
             return
-        try:
-            if self.sqlite_path is not None:
-                columns = ",".join(
-                    name for name, _ in PUBLIC_SIGNALS_COLUMNS if name != "event_pk"
-                )
-                placeholders = ",".join("?" for _ in columns.split(","))
-                sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders})"
-                with sqlite3.connect(self.sqlite_path, timeout=self.connect_timeout_s) as conn:
-                    try:
-                        conn.executemany(
-                            sql,
-                            [
-                                _event_to_row(event, event.get("session_pk"))
-                                for event in buffer
-                            ],
-                        )
-                        conn.commit()
-                    except sqlite3.IntegrityError as exc:
-                        if _is_unique_constraint_error(exc):
-                            # Treat UNIQUE violations as duplicate records (non-fatal).
-                            conn.rollback()
-                            return
-                        raise
-            else:
-                if self.engine is None or text is None:
-                    raise RuntimeError("SQLAlchemy not installed.")
-                columns = ",".join(
-                    name for name, _ in PUBLIC_SIGNALS_COLUMNS if name != "event_pk"
-                )
-                values = ",".join(f":{name}" for name in columns.split(","))
-                stmt = text(f"INSERT INTO {self.table} ({columns}) VALUES ({values})")
-                with self.engine.begin() as conn:
-                    conn.execute(
-                        stmt,
-                        [
-                            _event_to_named_row(event, event.get("session_pk"))
-                            for event in buffer
-                        ],
-                    )
-        except Exception as exc:
-            self.error = f"SQL telemetry insert failed: {exc}"
-            self.available = False
-
-    def stop(self) -> None:
-        if self.stop_event.is_set():
-            return
-        self.available = False
-        self.stop_event.set()
-        try:
-            self.queue.put_nowait(_STOP_SENTINEL)
-        except Exception:
-            pass
-        if self.thread is not None and self.thread.is_alive():
-            self.thread.join(timeout=2.0)
-        if self.engine is not None:
-            try:
-                self.engine.dispose()
-            except Exception:
-                pass
+        if self.engine is None or text is None:
+            raise RuntimeError("SQLAlchemy not installed.")
+        values = ",".join(f":{name}" for name in columns.split(","))
+        stmt = text(f"INSERT INTO {self.table} ({columns}) VALUES ({values})")
+        with self.engine.begin() as conn:
+            conn.execute(
+                stmt,
+                [_event_to_named_row(event, event.get("session_pk")) for event in events],
+            )
 
 
 def get_writer(config: Dict[str, Any]) -> SQLTelemetryWriter | None:
+    """Return the shared writer for ``config``, creating it on first use.
+
+    Raises RuntimeError for invalid configuration or when the writer cannot
+    start. Write errors never raise here: the writer retries or counts them
+    (see ``SQLBatchWriter.stats``) and stays in service.
+    """
     global _WRITER, _WRITER_KEY
     resolved_cfg = resolve_sql_config(config)
     uri = str(resolved_cfg.get("uri", "")).strip()
@@ -528,49 +453,53 @@ def get_writer(config: Dict[str, Any]) -> SQLTelemetryWriter | None:
         table = _validate_table_name(table, "table")
         sessions_table = _validate_table_name(sessions_table, "sessions_table")
     except ValueError as exc:
-        if _WRITER is not None:
-            _WRITER.stop()
-        _WRITER = None
-        _WRITER_KEY = None
+        stop_writer()
         raise RuntimeError(f"SQL telemetry config invalid: {exc}") from exc
     batch_size = int(config.get("batch_size", 50))
     flush_interval_ms = int(config.get("flush_interval_ms", 1000))
     connect_timeout_s = int(config.get("connect_timeout_s", 5))
-    key = (uri, table, sessions_table, batch_size, flush_interval_ms, connect_timeout_s)
+    max_retries = int(config.get("max_retries", DEFAULT_MAX_RETRIES))
+    retry_backoff_ms = int(config.get("retry_backoff_ms", DEFAULT_RETRY_BACKOFF_MS))
+    stop_timeout_s = float(config.get("stop_timeout_s", DEFAULT_STOP_TIMEOUT_S))
+    key = (
+        uri,
+        table,
+        sessions_table,
+        batch_size,
+        flush_interval_ms,
+        connect_timeout_s,
+        max_retries,
+        retry_backoff_ms,
+        stop_timeout_s,
+    )
     if not uri:
+        stop_writer()
+        raise RuntimeError("SQL telemetry URI is empty.")
+    with _WRITER_LOCK:
+        if _WRITER is not None and _WRITER_KEY == key and _WRITER.available:
+            return _WRITER
         if _WRITER is not None:
+            # Reconfigured, or stopped by its owner: flush what it still holds.
             _WRITER.stop()
         _WRITER = None
         _WRITER_KEY = None
-        raise RuntimeError("SQL telemetry URI is empty.")
-    if _WRITER is None or _WRITER_KEY != key:
-        if _WRITER is not None:
-            _WRITER.stop()
-        _WRITER = SQLTelemetryWriter(
+        writer = SQLTelemetryWriter(
             uri=uri,
             table=table,
             sessions_table=sessions_table,
             batch_size=batch_size,
             flush_interval_ms=flush_interval_ms,
             connect_timeout_s=connect_timeout_s,
+            max_retries=max_retries,
+            retry_backoff_ms=retry_backoff_ms,
+            stop_timeout_s=stop_timeout_s,
         )
+        if not writer.available:
+            writer.stop()
+            raise RuntimeError(writer.error or "SQL telemetry writer unavailable.")
+        _WRITER = writer
         _WRITER_KEY = key
-        if not _WRITER.available:
-            _WRITER.stop()
-            _WRITER = None
-            _WRITER_KEY = None
-            raise RuntimeError(_WRITER.error or "SQL telemetry writer unavailable.")
-    if _WRITER is not None and not _WRITER.available:
-        _WRITER = None
-        _WRITER_KEY = None
-        raise RuntimeError("SQL telemetry writer unavailable.")
-    if _WRITER is not None and _WRITER.error:
-        error = _WRITER.error
-        _WRITER.stop()
-        _WRITER = None
-        _WRITER_KEY = None
-        raise RuntimeError(error)
-    return _WRITER
+        return writer
 
 
 def enqueue_event(
@@ -600,12 +529,29 @@ def enqueue_event(
     return True
 
 
-def stop_writer() -> None:
+def stop_writer(timeout_s: float | None = None) -> Dict[str, int] | None:
+    """Stop the shared writer, flushing queued events within ``timeout_s`` seconds
+    (default: the writer's ``stop_timeout_s``). Returns its final delivery
+    counters, or None when no writer was running."""
     global _WRITER, _WRITER_KEY
-    if _WRITER is not None:
-        _WRITER.stop()
-    _WRITER = None
-    _WRITER_KEY = None
+    with _WRITER_LOCK:
+        writer = _WRITER
+        _WRITER = None
+        _WRITER_KEY = None
+    if writer is None:
+        return None
+    writer.stop(timeout_s)
+    return writer.stats()
+
+
+def writer_stats() -> Dict[str, int] | None:
+    """Delivery counters of the shared writer, or None when none is running."""
+    writer = _WRITER
+    return writer.stats() if writer is not None else None
+
+
+# Flush events still queued when the interpreter exits (bounded by stop_timeout_s).
+atexit.register(stop_writer)
 
 
 def begin_session(

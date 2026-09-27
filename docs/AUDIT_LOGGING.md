@@ -12,6 +12,48 @@ Use `TrustVaultLogger.verify_chain()` to validate the on-disk chain and detect t
 `src/lionlock/logging/event_log.py` writes sanitized public telemetry JSONL/SQL events for analysis.
 This stream is privacy-focused and operational, but it is **not** the canonical tamper-evident audit chain.
 
+## SQL sink delivery guarantees
+
+The opt-in SQL sinks (`logging_sql` for public telemetry, `trust_overlay.sql` for Trust Overlay
+records) queue events in memory and insert them in batches from a background thread. Both share
+one delivery policy, `src/lionlock/utils/sql_batch_writer.py`:
+
+- **Every accepted event is accounted for exactly once**, as `written`, `duplicates` (already
+  stored: rejected by a UNIQUE or PRIMARY KEY constraint), `failed` (a write was attempted but
+  the row was not persisted) or `dropped` (never attempted). Until then it is `pending`, so
+  `enqueued == written + duplicates + failed + dropped + pending` always holds.
+- **Shutdown flushes.** `stop_writer()`, which also runs at interpreter exit, writes everything
+  still queued before returning, bounded by `stop_timeout_s`. Events it cannot start writing in
+  time are counted as `dropped_on_stop`.
+- **Transient errors are retried, not fatal.** Lock contention (`database is locked`) and lost
+  connections are retried up to `max_retries` times with exponential backoff: `retry_backoff_ms`,
+  doubling per retry, capped at 2 s, with no jitter. Write errors never disable the writer and
+  never raise into `log_event()`; invalid configuration and startup failures still raise
+  `RuntimeError`.
+- **One bad row cannot sink its batch.** A non-transient batch error, such as a UNIQUE violation,
+  rolls the batch back and re-inserts it row by row. True duplicates are skipped and counted as
+  `duplicates`, other constraint failures are counted as `failed`, and every other row is written.
+- **Overflow is reported.** When the queue (`max(100, 10 * batch_size)` events) is full, the
+  oldest queued event is evicted to keep the newest data. Each eviction is counted as
+  `dropped_queue_full` and logged as a warning at the 1st, 2nd, 4th, 8th, ... drop.
+
+Read the counters with `lionlock.logging.sql_telemetry.writer_stats()` or
+`lionlock.trust_overlay.sql_sink.writer_stats()`; `stop_writer()` returns the final counters.
+`writer.last_error` holds the most recent write error: the driver message only, never SQL text or
+bound values.
+
+Optional keys, accepted by both `[logging_sql]` and `[trust_overlay.sql]`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `max_retries` | `5` | Retries per write after a transient error. |
+| `retry_backoff_ms` | `50` | First retry delay; doubles per retry, capped at 2 s. |
+| `stop_timeout_s` | `2.0` | Upper bound on the flush done by `stop_writer()` and at exit. |
+
 ## Verification coverage
 
 Tamper and truncation checks are covered by `tests/test_logger.py`.
+
+SQL sink delivery guarantees are covered by `tests/test_sql_writer_reliability.py` (both sinks,
+via sqlite3 and, when installed, SQLAlchemy), `tests/test_public_telemetry_persistence.py` and
+`tests/test_trust_overlay_sql.py`.

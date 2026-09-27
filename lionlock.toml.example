@@ -12,6 +12,10 @@ path = "logs/lionlock_events.jsonl"
 enabled = false
 token = ""
 uri = ""
+# Optional delivery tuning (defaults shown; see docs/AUDIT_LOGGING.md):
+# max_retries = 5
+# retry_backoff_ms = 50
+# stop_timeout_s = 2.0
 
 # Environment override:
 #   LIONLOCK_GATING_ENABLED=true|false
