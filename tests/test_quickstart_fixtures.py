@@ -20,6 +20,7 @@ def test_fixture_schema_and_minimum_samples() -> None:
     for sample in samples:
         assert isinstance(sample.get("id"), str) and sample["id"]
         assert isinstance(sample.get("text"), str) and sample["text"]
+        assert isinstance(sample.get("response"), str) and sample["response"]
         assert sample.get("label") in {"FLAGGED", "CLEAN"}
 
 

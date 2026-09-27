@@ -12,7 +12,9 @@ LOGGER = logging.getLogger(__name__)
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
 
-SIGNAL_SCHEMA_VERSION = "SE-0.2.0"
+# SE-0.3.0: low_conf_halluc rises with hallucination_risk. SE-0.2.0 bundles computed it from
+# 1 - hallucination_risk, which scored grounded answers as high risk.
+SIGNAL_SCHEMA_VERSION = "SE-0.3.0"
 
 DEFAULT_SIGNAL_WEIGHTS: Dict[str, float] = {
     "repetition_loopiness": 0.30,
@@ -153,10 +155,16 @@ def _latency_jitter_score(latencies: list[float]) -> float:
     return _clamp(jitter / mean)
 
 
-def _low_conf_halluc(scores: SignalScores) -> float:
+def low_conf_halluc_score(scores: SignalScores) -> float:
+    """Hallucination risk in varied, fluent text; high only when both factors are high.
+
+    ``1 - novelty_entropy_proxy`` is lexical diversity, the engine's entropy proxy.
+    ``hallucination_risk`` averages context drift and structural incoherence. The product is
+    high for fluent text that drifts from the prompt, and low for grounded answers and for
+    repetitive loops, which the repetition signals already cover.
+    """
     entropy_high = _clamp(1.0 - scores.novelty_entropy_proxy)
-    hallucination_low = _clamp(1.0 - scores.hallucination_risk)
-    return _clamp(entropy_high * hallucination_low)
+    return _clamp(entropy_high * _clamp(scores.hallucination_risk))
 
 
 def _congestion_signature(
@@ -254,7 +262,7 @@ def _score_response_core(prompt: str, response: str, metadata: dict | None = Non
         fatigue_risk_index=fatigue_risk_50t,
         fatigue_risk_25t=fatigue_risk_25t,
         fatigue_risk_50t=fatigue_risk_50t,
-        low_conf_halluc=_low_conf_halluc(signal_scores),
+        low_conf_halluc=low_conf_halluc_score(signal_scores),
         congestion_signature=_congestion_signature(latency_window_stats, signal_scores),
     )
 

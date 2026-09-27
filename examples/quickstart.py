@@ -39,7 +39,8 @@ def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
 
     for idx, record in enumerate(records):
         prompt = str(record.get("text", ""))
-        payload = {"prompt": prompt, "response": prompt, "metadata": {"turn_index": idx}}
+        response = str(record.get("response") or prompt)
+        payload = {"prompt": prompt, "response": response, "metadata": {"turn_index": idx}}
         bundle = score_payload(payload)
         if bundle is None:
             continue
@@ -74,7 +75,7 @@ def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
             prompt_type="other",
             derived_signals=bundle.derived_signals,
             aggregate_score=decision.decision_risk_score,
-            response_text=prompt,
+            response_text=response,
             response_hash=None,
             score_history=[decision.decision_risk_score],
             timestamps=[timestamp],

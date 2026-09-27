@@ -43,7 +43,10 @@ def test_module05_end_to_end_sql_pipeline() -> None:
         rel_tol=0.0,
         abs_tol=1e-9,
     )
-    assert decision.trigger_signal == "low_conf_halluc"
+    # The response echoes the prompt, so hallucination risk is zero and fatigue drives the
+    # derived channel (maximal entropy_decay, drift_slope, and turn_index inputs).
+    assert derived["low_conf_halluc"] == 0.0
+    assert decision.trigger_signal == "fatigue_risk_index"
 
     event = {
         "session_id": "session-1",

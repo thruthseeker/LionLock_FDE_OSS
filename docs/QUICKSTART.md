@@ -39,6 +39,9 @@ Fixture data lives at:
 Each record contains:
 
 - `id`
-- `text`
+- `text`: the prompt
+- `response`: a sample model response that exhibits the labeled behavior
 - `label` (`FLAGGED` or `CLEAN`)
 - optional `notes`
+
+With the bundled fixtures the summary is `FLAGGED=3 CLEAN=2`, matching the labels.

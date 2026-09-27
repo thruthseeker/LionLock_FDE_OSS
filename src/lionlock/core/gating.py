@@ -8,7 +8,7 @@ from .models import (
     SignalScores,
     canonical_gating_decision,
 )
-from .scoring import SIGNAL_SCHEMA_VERSION, aggregate_score
+from .scoring import SIGNAL_SCHEMA_VERSION, aggregate_score, low_conf_halluc_score
 
 DEFAULT_THRESHOLDS: Dict[str, float] = {
     "yellow": 0.45,
@@ -99,12 +99,6 @@ def _pick_by_order(values: Dict[str, float], order: Iterable[str]) -> str:
         if values.get(key, -1.0) == best_value:
             return key
     return "unknown"
-
-
-def _low_conf_halluc(scores: SignalScores) -> float:
-    entropy_high = _clamp(1.0 - scores.novelty_entropy_proxy)
-    hallucination_low = _clamp(1.0 - scores.hallucination_risk)
-    return _clamp(entropy_high * hallucination_low)
 
 
 def _evaluate_policy_with_scores(
@@ -200,7 +194,7 @@ def decide_gate(
         fatigue_risk_index=0.0,
         fatigue_risk_25t=0.0,
         fatigue_risk_50t=0.0,
-        low_conf_halluc=_low_conf_halluc(scores),
+        low_conf_halluc=low_conf_halluc_score(scores),
         congestion_signature=0.0,
     )
     bundle = SignalBundle(

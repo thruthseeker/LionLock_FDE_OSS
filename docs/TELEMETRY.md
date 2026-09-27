@@ -266,6 +266,11 @@ for field_decision, raw in rows:
 print(f"{changed} of {len(rows)} field decisions would change under the candidate thresholds")
 ```
 
+Each bundle records its `signal_schema_version`. Bundles from before `SE-0.3.0` carry a
+`low_conf_halluc` value computed from `1 - hallucination_risk`, which scored grounded answers as
+high risk. When replaying older data, filter on the version, or recompute that field from the
+stored signal scores with `lionlock.core.scoring.low_conf_halluc_score`.
+
 ### Deletion requests
 
 `lionlock-telemetry status` shows an install's `install_id`. To delete everything uploaded under
