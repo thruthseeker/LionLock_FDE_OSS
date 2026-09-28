@@ -17,10 +17,11 @@ from lionlock.core.gating import (
     evaluate_policy,
     gating_derived_risk_keys,
 )
-from lionlock.core.models import SignalScores
+from lionlock.core.models import DerivedSignals, SignalBundle, SignalScores
 from lionlock.core.scoring import (
     FATIGUE_SIGMOID_BIAS,
     FATIGUE_SIGMOID_GAIN,
+    SIGNAL_SCHEMA_VERSION,
     score_response,
 )
 
@@ -125,6 +126,49 @@ def test_fatigue_is_monotonic_in_each_input() -> None:
         assert (
             upper.derived_signals.fatigue_risk_index >= lower.derived_signals.fatigue_risk_index
         ), key
+
+
+def _hand_built_bundle(*, fatigue: float, missing_inputs: tuple[str, ...]) -> SignalBundle:
+    """Mirrors the bundle in test_module05_derived_influence, but with missing_inputs settable."""
+    return SignalBundle(
+        signal_schema_version=SIGNAL_SCHEMA_VERSION,
+        signal_scores=SignalScores(
+            repetition_loopiness=0.05,
+            novelty_entropy_proxy=0.05,
+            coherence_structure=0.05,
+            context_adherence=0.05,
+            hallucination_risk=0.05,
+        ),
+        derived_signals=DerivedSignals(
+            fatigue_risk_index=fatigue,
+            fatigue_risk_25t=fatigue,
+            fatigue_risk_50t=fatigue,
+            low_conf_halluc=0.1,
+            congestion_signature=0.1,
+        ),
+        missing_inputs=missing_inputs,
+    )
+
+
+def test_one_missing_fatigue_input_stops_a_hand_built_escalation() -> None:
+    """Negative twin of test_module05_derived_influence.test_derived_channel_escalates_decision.
+
+    That case drives fatigue_risk_index to 0.9 with an empty missing_inputs and gets a BLOCK on
+    trigger fatigue_risk_index. Declaring a *single* fatigue input missing has to remove the whole
+    channel, because the rule is "any input absent", not "all inputs absent".
+    """
+    escalating = evaluate_policy(_hand_built_bundle(fatigue=0.9, missing_inputs=()))
+    withheld = evaluate_policy(
+        _hand_built_bundle(fatigue=0.9, missing_inputs=("entropy_decay",)),
+    )
+
+    assert escalating.gating_decision == "BLOCK"
+    assert escalating.trigger_signal == "fatigue_risk_index"
+
+    assert withheld.gating_decision != "BLOCK"
+    assert withheld.decision_risk_score < escalating.decision_risk_score
+    assert withheld.trigger_signal != "fatigue_risk_index"
+    assert withheld.reason_code != "fatigue_risk"
 
 
 def test_decide_gate_does_not_attribute_an_all_zero_call_to_fatigue() -> None:
