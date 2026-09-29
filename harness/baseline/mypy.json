@@ -1,0 +1,212 @@
+[
+  [
+    "src/lionlock/anomaly/detector.py",
+    "arg-type",
+    "Argument 1 to \"float\" has incompatible type \"float | None\"; expected \"str | Buffer | SupportsFloat | SupportsIndex\""
+  ],
+  [
+    "src/lionlock/anomaly/detector.py",
+    "union-attr",
+    "Item \"None\" of \"Any | dict[Any, Any] | None\" has no attribute \"get\""
+  ],
+  [
+    "src/lionlock/anomaly/detector.py",
+    "union-attr",
+    "Item \"None\" of \"Any | dict[Any, Any] | None\" has no attribute \"get\""
+  ],
+  [
+    "src/lionlock/anomaly/detector.py",
+    "union-attr",
+    "Item \"None\" of \"Any | dict[Any, Any] | None\" has no attribute \"get\""
+  ],
+  [
+    "src/lionlock/anomaly/detector.py",
+    "union-attr",
+    "Item \"None\" of \"Any | dict[Any, Any] | None\" has no attribute \"get\""
+  ],
+  [
+    "src/lionlock/anomaly/detector.py",
+    "union-attr",
+    "Item \"None\" of \"Any | dict[Any, Any] | None\" has no attribute \"get\""
+  ],
+  [
+    "src/lionlock/anomaly/detector.py",
+    "union-attr",
+    "Item \"None\" of \"Any | dict[Any, Any] | None\" has no attribute \"get\""
+  ],
+  [
+    "src/lionlock/logging/anomaly_sql.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/logging/anomaly_sql.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/logging/events_sql.py",
+    "arg-type",
+    "Argument 2 to \"_normalize_severity\" has incompatible type \"float | None\"; expected \"float\""
+  ],
+  [
+    "src/lionlock/logging/events_sql.py",
+    "assignment",
+    "Incompatible types in assignment (expression has type \"str | None\", variable has type \"str\")"
+  ],
+  [
+    "src/lionlock/logging/events_sql.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/logging/events_sql.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/logging/missed_signal_sql.py",
+    "assignment",
+    "Incompatible types in assignment (expression has type \"str | None\", variable has type \"str\")"
+  ],
+  [
+    "src/lionlock/logging/missed_signal_sql.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/logging/missed_signal_sql.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/logging/sql_init.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/logging/sql_init.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/logging/sql_telemetry.py",
+    "assignment",
+    "Incompatible types in assignment (expression has type \"None\", variable has type \"str\")"
+  ],
+  [
+    "src/lionlock/logging/sql_telemetry.py",
+    "attr-defined",
+    "\"None\" has no attribute \"error\""
+  ],
+  [
+    "src/lionlock/logging/sql_telemetry.py",
+    "no-redef",
+    "Attribute \"error\" already defined on line 369"
+  ],
+  [
+    "src/lionlock/logging/sql_telemetry.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/logging/sql_telemetry.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/logging/sql_telemetry.py",
+    "var-annotated",
+    "Need type annotation for \"_TOKEN_MAP\" (hint: \"_TOKEN_MAP: dict[<type>, <type>] = ...\")"
+  ],
+  [
+    "src/lionlock/replay/evaluation_labels.py",
+    "arg-type",
+    "Argument 1 to \"int\" has incompatible type \"Any | None\"; expected \"str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc\""
+  ],
+  [
+    "src/lionlock/replay/evaluation_labels.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/replay/evaluation_labels.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/replay/sql_reader.py",
+    "arg-type",
+    "Argument 1 to \"int\" has incompatible type \"Any | None\"; expected \"str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc\""
+  ],
+  [
+    "src/lionlock/replay/sql_reader.py",
+    "arg-type",
+    "Argument 1 to \"int\" has incompatible type \"Any | None\"; expected \"str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc\""
+  ],
+  [
+    "src/lionlock/replay/sql_reader.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/replay/sql_reader.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "arg-type",
+    "Argument \"prompt\" to \"SignalPayload\" has incompatible type \"Any | None\"; expected \"str\""
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "arg-type",
+    "Argument \"response\" to \"SignalPayload\" has incompatible type \"Any | None\"; expected \"str\""
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "no-redef",
+    "Name \"SignalMetadata\" already defined on line 11"
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "no-redef",
+    "Name \"SignalPayload\" already defined on line 22"
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "no-redef",
+    "Name \"ValidationError\" already defined (possibly by an import)"
+  ],
+  [
+    "src/lionlock/sim/runner.py",
+    "arg-type",
+    "Argument 1 to \"get\" of \"dict\" has incompatible type \"str | None\"; expected \"str\""
+  ],
+  [
+    "src/lionlock/sim/runner.py",
+    "index",
+    "Invalid index type \"str | None\" for \"dict[str, int]\"; expected type \"str\""
+  ],
+  [
+    "src/lionlock/sim/runner.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/sim/runner.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/trust_overlay/sql_sink.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ],
+  [
+    "src/lionlock/trust_overlay/sql_sink.py",
+    "unused-ignore",
+    "Unused \"type: ignore\" comment"
+  ]
+]
