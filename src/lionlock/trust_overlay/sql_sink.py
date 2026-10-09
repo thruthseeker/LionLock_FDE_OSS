@@ -259,16 +259,19 @@ class TrustOverlaySQLWriter(SQLBatchWriter):
             placeholders = ",".join("?" for _ in TRUST_OVERLAY_COLUMNS)
             sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders})"
             rows = [_record_to_row(record) for record in records]
+            # Closing without a commit rolls back, so a failed insert stores nothing.
             with closing(sqlite3.connect(self.sqlite_path, timeout=self.connect_timeout_s)) as conn:
-                with conn:  # Commits on success, rolls back on error.
-                    conn.executemany(sql, rows)
+                conn.executemany(sql, rows)
+                self._commit(conn.commit)
             return
         if self.engine is None or text is None:
             raise RuntimeError("SQLAlchemy not installed.")
         values = ",".join(f":{name}" for name, _ in TRUST_OVERLAY_COLUMNS)
         stmt = text(f"INSERT INTO {self.table} ({columns}) VALUES ({values})")
-        with self.engine.begin() as conn:
+        with self.engine.connect() as conn:
+            transaction = conn.begin()
             conn.execute(stmt, [_record_to_named_row(record) for record in records])
+            self._commit(transaction.commit)
 
 
 def get_writer(config: Dict[str, Any]) -> TrustOverlaySQLWriter | None:
@@ -338,8 +341,10 @@ def enqueue_record(config: Dict[str, Any], record: Dict[str, Any]) -> bool:
 
 def stop_writer(timeout_s: float | None = None) -> Dict[str, int] | None:
     """Stop the shared writer, flushing queued records within ``timeout_s`` seconds
-    (default: the writer's ``stop_timeout_s``). Returns its final delivery
-    counters, or None when no writer was running."""
+    (default: the writer's ``stop_timeout_s``). Returns its delivery counters, or
+    None when no writer was running. They are final unless ``pending`` is non-zero:
+    a write was then still running at the deadline, and its outcome is logged as
+    ``sql_sink_late_outcome`` when it finishes."""
     global _WRITER, _WRITER_KEY
     with _WRITER_LOCK:
         writer = _WRITER

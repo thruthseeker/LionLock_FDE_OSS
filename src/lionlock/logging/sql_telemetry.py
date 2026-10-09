@@ -422,19 +422,22 @@ class SQLTelemetryWriter(SQLBatchWriter):
             placeholders = ",".join("?" for _ in columns.split(","))
             sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders})"
             rows = [_event_to_row(event, event.get("session_pk")) for event in events]
+            # Closing without a commit rolls back, so a failed insert stores nothing.
             with closing(sqlite3.connect(self.sqlite_path, timeout=self.connect_timeout_s)) as conn:
-                with conn:  # Commits on success, rolls back on error.
-                    conn.executemany(sql, rows)
+                conn.executemany(sql, rows)
+                self._commit(conn.commit)
             return
         if self.engine is None or text is None:
             raise RuntimeError("SQLAlchemy not installed.")
         values = ",".join(f":{name}" for name in columns.split(","))
         stmt = text(f"INSERT INTO {self.table} ({columns}) VALUES ({values})")
-        with self.engine.begin() as conn:
+        with self.engine.connect() as conn:
+            transaction = conn.begin()
             conn.execute(
                 stmt,
                 [_event_to_named_row(event, event.get("session_pk")) for event in events],
             )
+            self._commit(transaction.commit)
 
 
 def get_writer(config: Dict[str, Any]) -> SQLTelemetryWriter | None:
@@ -531,8 +534,10 @@ def enqueue_event(
 
 def stop_writer(timeout_s: float | None = None) -> Dict[str, int] | None:
     """Stop the shared writer, flushing queued events within ``timeout_s`` seconds
-    (default: the writer's ``stop_timeout_s``). Returns its final delivery
-    counters, or None when no writer was running."""
+    (default: the writer's ``stop_timeout_s``). Returns its delivery counters, or
+    None when no writer was running. They are final unless ``pending`` is non-zero:
+    a write was then still running at the deadline, and its outcome is logged as
+    ``sql_sink_late_outcome`` when it finishes."""
     global _WRITER, _WRITER_KEY
     with _WRITER_LOCK:
         writer = _WRITER

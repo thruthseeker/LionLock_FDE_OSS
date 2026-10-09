@@ -20,16 +20,20 @@ one delivery policy, `src/lionlock/utils/sql_batch_writer.py`:
 
 - **Every accepted event is accounted for exactly once**, as `written`, `duplicates` (already
   stored: rejected by a UNIQUE or PRIMARY KEY constraint), `failed` (a write was attempted but
-  the row was not persisted) or `dropped` (never attempted). Until then it is `pending`, so
-  `enqueued == written + duplicates + failed + dropped + pending` always holds.
+  the row was not persisted), `in_doubt` (the COMMIT failed without a known outcome, so the row
+  may or may not be stored) or `dropped` (never attempted). Until then it is `pending`, so
+  `enqueued == written + duplicates + failed + in_doubt + dropped + pending` always holds.
 - **Shutdown flushes.** `stop_writer()`, which also runs at interpreter exit, writes everything
   still queued before returning, bounded by `stop_timeout_s`. Events it cannot start writing in
   time are counted as `dropped_on_stop`.
 - **Transient errors are retried, not fatal.** Lock contention (`database is locked`) and lost
   connections are retried up to `max_retries` times with exponential backoff: `retry_backoff_ms`,
   doubling per retry, capped at 2 s, with no jitter. Write errors never disable the writer and
-  never raise into `log_event()`; invalid configuration and startup failures still raise
-  `RuntimeError`.
+  never raise into `log_event()` or `append_trust_record()`.
+- **No write is stored twice.** A write is retried only when it is known to have stored nothing.
+  If the COMMIT itself fails without a known outcome, for example because the connection was
+  lost, the rows may already be stored, so the write is not retried and its events are counted
+  as `in_doubt`.
 - **One bad row cannot sink its batch.** A non-transient batch error, such as a UNIQUE violation,
   rolls the batch back and re-inserts it row by row. True duplicates are skipped and counted as
   `duplicates`, other constraint failures are counted as `failed`, and every other row is written.
@@ -37,10 +41,20 @@ one delivery policy, `src/lionlock/utils/sql_batch_writer.py`:
   oldest queued event is evicted to keep the newest data. Each eviction is counted as
   `dropped_queue_full` and logged as a warning at the 1st, 2nd, 4th, 8th, ... drop.
 
+Startup failures differ by sink. For public telemetry, invalid configuration and startup failures
+raise `RuntimeError` from `log_event()`, and the next call tries to start a writer again. Trust
+Overlay never raises for SQL problems: if its SQL writer cannot start, `append_trust_record()`
+still writes the JSONL record but nothing reaches SQL, and
+`lionlock.trust_overlay.sql_sink.get_writer()` returns `None` until the `[trust_overlay.sql]`
+configuration changes or `stop_writer()` is called.
+
 Read the counters with `lionlock.logging.sql_telemetry.writer_stats()` or
-`lionlock.trust_overlay.sql_sink.writer_stats()`; `stop_writer()` returns the final counters.
-`writer.last_error` holds the most recent write error: the driver message only, never SQL text or
-bound values.
+`lionlock.trust_overlay.sql_sink.writer_stats()`. `stop_writer()` returns the counters when it
+returns; they are final unless `pending` is non-zero, which means a write was still running at the
+deadline. That write is not interrupted, and its outcome is logged as `sql_sink_late_outcome` when
+it finishes. `writer.last_error` holds the most recent write error without data values: the error
+type, its SQLite or SQLSTATE code when available, and the first line of the driver message cut at
+the first quote.
 
 Optional keys, accepted by both `[logging_sql]` and `[trust_overlay.sql]`:
 

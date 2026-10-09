@@ -27,6 +27,7 @@ from lionlock.trust_overlay.sql_sink import TRUST_OVERLAY_COLUMNS, TrustOverlayS
 from lionlock.utils.sql_batch_writer import (
     MAX_RETRY_BACKOFF_S,
     SQLBatchWriter,
+    commit_stored_nothing,
     describe_error,
     is_duplicate_error,
     is_transient_error,
@@ -104,6 +105,15 @@ class Sink:
             return exc.OperationalError("INSERT", {}, locked)
         return locked
 
+    def lost_connection_error(self) -> Exception:
+        """A COMMIT failure whose outcome is unknown on this sink's backend."""
+        if self.backend == "sqlalchemy":
+            from sqlalchemy import exc
+
+            lost = ConnectionError("server closed the connection unexpectedly")
+            return exc.OperationalError("COMMIT", {}, lost, connection_invalidated=True)
+        return sqlite3.OperationalError("disk I/O error")
+
 
 @pytest.fixture(params=SINK_KINDS)
 def make_sink(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Callable[..., Sink]]:
@@ -173,6 +183,25 @@ def wrap_writes(
     return starts
 
 
+def wrap_commits(
+    monkeypatch: pytest.MonkeyPatch,
+    writer: SQLBatchWriter,
+    around: Callable[[int, Callable[[], Any]], None],
+) -> List[int]:
+    """Run ``around(call_number, real_commit)`` in place of every COMMIT. Whatever it
+    raises still goes through the writer's own commit-outcome classification."""
+    real_commit_step = writer._commit
+    calls: List[int] = []
+
+    def commit_step(commit: Callable[[], Any]) -> None:
+        calls.append(len(calls) + 1)
+        call = len(calls)
+        real_commit_step(lambda: around(call, commit))
+
+    monkeypatch.setattr(writer, "_commit", commit_step)
+    return calls
+
+
 def wait_for(predicate: Callable[[], bool], timeout_s: float = 10.0) -> None:
     deadline = time.monotonic() + timeout_s
     while not predicate():
@@ -184,7 +213,8 @@ def wait_for(predicate: Callable[[], bool], timeout_s: float = 10.0) -> None:
 def assert_conserved(stats: Dict[str, int]) -> None:
     """Every accepted event is accounted for exactly once."""
     accounted = sum(
-        stats[name] for name in ("written", "duplicates", "failed", "dropped", "pending")
+        stats[name]
+        for name in ("written", "duplicates", "failed", "in_doubt", "dropped", "pending")
     )
     assert stats["enqueued"] == accounted, stats
 
@@ -208,8 +238,11 @@ def test_stop_flushes_the_last_partial_batch(make_sink: Callable[..., Sink]) -> 
 
 
 def test_stop_is_time_bounded_when_a_write_hangs(
-    make_sink: Callable[..., Sink], monkeypatch: pytest.MonkeyPatch
+    make_sink: Callable[..., Sink],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level(logging.WARNING, logger="lionlock.utils.sql_batch_writer")
     sink = make_sink(batch_size=2)
     writer = sink.writer
     entered, release = threading.Event(), threading.Event()
@@ -245,6 +278,10 @@ def test_stop_is_time_bounded_when_a_write_hangs(
     final = writer.stats()
     assert (final["written"], final["dropped"], final["pending"]) == (2, 3, 0)
     assert_conserved(final)
+    # stop() returned before this outcome existed, so it is reported once it does.
+    late = [r.getMessage() for r in caplog.records if "sql_sink_late_outcome" in r.getMessage()]
+    assert len(late) == 1
+    assert "written=2 " in late[0] and "dropped=3 " in late[0] and late[0].endswith("pending=0")
 
 
 def test_stop_deadline_ends_retries_of_a_persistent_failure(
@@ -306,6 +343,7 @@ def test_other_constraint_failures_fail_only_the_offending_row(
     stats = writer.stats()
     assert (stats["written"], stats["duplicates"], stats["failed"]) == (2, 0, 1)
     assert "CHECK constraint failed" in (writer.last_error or "")
+    assert "poison" not in (writer.last_error or "")  # Quoted text is never recorded.
     assert writer.available and writer.error is None
     assert writer.enqueue(sink.event("c"))  # The writer stays in service.
 
@@ -376,6 +414,60 @@ def test_exhausted_retries_count_failed_and_writer_keeps_running(
     final = writer.stats()
     assert (final["written"], final["failed"], final["dropped"], final["pending"]) == (2, 2, 0, 0)
     assert_conserved(final)
+
+
+def test_commit_with_unknown_outcome_is_never_replayed(
+    make_sink: Callable[..., Sink],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="lionlock.utils.sql_batch_writer")
+    sink = make_sink(batch_size=3)
+    writer = sink.writer
+
+    def commit_then_lose_connection(call: int, commit: Callable[[], Any]) -> None:
+        commit()  # The rows are stored...
+        raise sink.lost_connection_error()  # ...but the client never learns it.
+
+    commits = wrap_commits(monkeypatch, writer, commit_then_lose_connection)
+    for key in ["a", "b", "c"]:
+        assert writer.enqueue(sink.event(key))
+    wait_for(lambda: writer.stats()["pending"] == 0)
+
+    # Replaying the batch, or its rows one by one, would store every row twice.
+    assert sink.keys() == ["a", "b", "c"]
+    assert len(commits) == 1
+    stats = writer.stats()
+    assert (stats["written"], stats["in_doubt"], stats["failed"], stats["retries"]) == (0, 3, 0, 0)
+    assert (writer.last_error or "").startswith("commit outcome unknown: ")
+    assert writer.available and writer.error is None
+    assert any("sql_sink_commit_outcome_unknown" in r.getMessage() for r in caplog.records)
+    writer.stop()
+    assert_conserved(writer.stats())
+
+
+def test_commit_failure_that_stored_nothing_is_retried(
+    make_sink: Callable[..., Sink], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sink = make_sink(batch_size=3)
+    writer = sink.writer
+
+    def locked_once_then_commit(call: int, commit: Callable[[], Any]) -> None:
+        if call == 1:
+            raise sink.transient_error()  # "database is locked" at COMMIT: nothing stored.
+        commit()
+
+    commits = wrap_commits(monkeypatch, writer, locked_once_then_commit)
+    for key in ["a", "b", "c"]:
+        assert writer.enqueue(sink.event(key))
+    wait_for(lambda: writer.stats()["pending"] == 0)
+
+    assert sink.keys() == ["a", "b", "c"]  # Retried once, stored once.
+    assert len(commits) == 2
+    stats = writer.stats()
+    assert (stats["written"], stats["in_doubt"], stats["retries"]) == (3, 0, 1)
+    writer.stop()
+    assert_conserved(writer.stats())
 
 
 def test_full_queue_evicts_oldest_and_counts_every_drop(
@@ -474,6 +566,42 @@ def test_error_classification_on_real_sqlite_errors(tmp_path: Path) -> None:
     assert not is_duplicate_error(ValueError("UNIQUE constraint failed"))
 
 
+class FakePgError(Exception):
+    """A psycopg2-style driver error carrying its SQLSTATE in ``pgcode``."""
+
+    def __init__(self, message: str, pgcode: str) -> None:
+        super().__init__(message)
+        self.pgcode = pgcode
+
+
+def test_commit_outcome_is_known_only_when_nothing_was_stored(tmp_path: Path) -> None:
+    errors = _real_sqlite_errors(tmp_path)
+    assert commit_stored_nothing(errors["busy"])  # SQLITE_BUSY leaves the transaction open.
+    assert commit_stored_nothing(errors["unique"])  # A constraint violation rolls back.
+    assert commit_stored_nothing(FakePgError("could not serialize access", "40001"))
+    assert commit_stored_nothing(FakePgError("deadlock detected", "40P01"))
+    # Anything else may have committed before the failure surfaced.
+    assert not commit_stored_nothing(sqlite3.OperationalError("disk I/O error"))
+    assert not commit_stored_nothing(FakePgError("terminating connection", "57P01"))
+    assert not commit_stored_nothing(ConnectionError("server closed the connection"))
+
+
+def test_recorded_errors_never_carry_quoted_values() -> None:
+    leaky = FakePgError(
+        'invalid input syntax for type double precision: "4111 1111 1111 1111"\n'
+        "LINE 1: INSERT INTO lionlock_signals VALUES ($1)",
+        "22P02",
+    )
+    assert describe_error(leaky) == (
+        "FakePgError [22P02]: invalid input syntax for type double precision: <redacted>"
+    )
+    assert describe_error(ValueError("could not convert string to float: 'secret'")) == (
+        "ValueError: could not convert string to float: <redacted>"
+    )
+    assert describe_error(KeyError("secret")) == "KeyError: <redacted>"
+    assert describe_error(RuntimeError()) == "RuntimeError"
+
+
 @requires_sqlalchemy
 def test_error_classification_through_sqlalchemy(tmp_path: Path) -> None:
     from sqlalchemy import exc
@@ -484,6 +612,12 @@ def test_error_classification_through_sqlalchemy(tmp_path: Path) -> None:
     assert is_transient_error(exc.OperationalError("INSERT", {}, errors["busy"]))
     assert not is_transient_error(exc.OperationalError("INSERT", {}, errors["missing_table"]))
     assert is_transient_error(exc.TimeoutError("QueuePool limit reached"))
-    # Recorded errors carry the driver message only, never SQL text or bound values.
+    # A lost connection at COMMIT leaves the outcome unknown; a locked COMMIT stored nothing.
+    lost = exc.OperationalError("COMMIT", {}, ConnectionError("gone"), connection_invalidated=True)
+    assert not commit_stored_nothing(lost)
+    assert commit_stored_nothing(exc.OperationalError("COMMIT", {}, errors["busy"]))
+    # Recorded errors never carry SQL text or bound values.
     wrapped = exc.IntegrityError("INSERT INTO t VALUES (?)", ("secret-value",), errors["unique"])
-    assert describe_error(wrapped) == "IntegrityError: UNIQUE constraint failed: t.name"
+    code = getattr(errors["unique"], "sqlite_errorname", None)  # Python 3.11+
+    label = f"IntegrityError [{code}]" if code else "IntegrityError"
+    assert describe_error(wrapped) == f"{label}: UNIQUE constraint failed: t.name"

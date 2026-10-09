@@ -7,10 +7,14 @@ delivery policy so both sinks give the same guarantees:
 * Every accepted event ends in exactly one terminal counter of ``stats()``:
   ``written``; ``duplicates`` (rejected by a UNIQUE or PRIMARY KEY constraint,
   i.e. already stored); ``failed`` (a write was attempted but the row could not
-  be persisted); or ``dropped`` (never attempted: evicted from a full queue, or
-  still queued when the stop deadline expired). Until then it is ``pending``.
+  be persisted); ``in_doubt`` (the COMMIT failed without a known outcome, so the
+  row may or may not be stored); or ``dropped`` (never attempted: evicted from a
+  full queue, or still queued when the stop deadline expired). Until then it is
+  ``pending``.
 * Transient errors (lock contention, lost connections) are retried with
   deterministic exponential backoff. Write errors never disable the writer.
+* A write is replayed only when it is known to have stored nothing. A COMMIT that
+  fails without a known outcome is never retried, so no row is stored twice.
 * A non-transient batch error, such as a single UNIQUE violation, rolls the
   batch back; its rows are then inserted one by one so only the offending rows
   are skipped (duplicates) or failed.
@@ -20,12 +24,13 @@ delivery policy so both sinks give the same guarantees:
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import threading
 import time
 from collections import deque
 from collections.abc import Mapping
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,11 +44,19 @@ _SQLITE_BUSY = 5
 _SQLITE_LOCKED = 6
 _SQLITE_CONSTRAINT_PRIMARYKEY = 1555
 _SQLITE_CONSTRAINT_UNIQUE = 2067
-# PostgreSQL SQLSTATE unique_violation.
+# PostgreSQL SQLSTATEs: unique_violation, and class 40 (transaction rollback).
 _PG_UNIQUE_VIOLATION = "23505"
+_PG_TRANSACTION_ROLLBACK_CLASS = "40"
 
-_OUTCOMES = ("written", "duplicates", "failed")
+_QUOTE = re.compile(r"[\"'`]")
+
+_OUTCOMES = ("written", "duplicates", "failed", "in_doubt")
 _COUNTERS = ("enqueued", *_OUTCOMES, "dropped_queue_full", "dropped_on_stop", "retries")
+
+
+class CommitOutcomeUnknown(Exception):
+    """The COMMIT failed without a known outcome (for example the connection was
+    lost), so the rows may already be stored. Such a write is never retried."""
 
 
 def _load_sqlalchemy_exc() -> Any:
@@ -63,6 +76,12 @@ def _driver_error(exc: BaseException) -> BaseException:
     return orig if isinstance(orig, BaseException) else exc
 
 
+def _sqlstate(driver_exc: BaseException) -> str | None:
+    """SQLSTATE of a PostgreSQL driver error (psycopg2 ``pgcode``, psycopg ``sqlstate``)."""
+    sqlstate = getattr(driver_exc, "pgcode", None) or getattr(driver_exc, "sqlstate", None)
+    return sqlstate if isinstance(sqlstate, str) and sqlstate else None
+
+
 def _is_sqlite_busy(exc: BaseException) -> bool:
     if not isinstance(exc, sqlite3.OperationalError):
         return False
@@ -71,6 +90,12 @@ def _is_sqlite_busy(exc: BaseException) -> bool:
         return (code & 0xFF) in (_SQLITE_BUSY, _SQLITE_LOCKED)
     message = str(exc).lower()
     return "locked" in message or "busy" in message
+
+
+def _is_integrity_error(exc: BaseException) -> bool:
+    return isinstance(_driver_error(exc), sqlite3.IntegrityError) or (
+        _SA_EXC is not None and isinstance(exc, _SA_EXC.IntegrityError)
+    )
 
 
 def is_transient_error(exc: BaseException) -> bool:
@@ -92,27 +117,53 @@ def is_transient_error(exc: BaseException) -> bool:
 
 def is_duplicate_error(exc: BaseException) -> bool:
     """True when ``exc`` is a UNIQUE or PRIMARY KEY violation (the row already exists)."""
-    driver_exc = _driver_error(exc)
-    is_integrity_error = isinstance(driver_exc, sqlite3.IntegrityError) or (
-        _SA_EXC is not None and isinstance(exc, _SA_EXC.IntegrityError)
-    )
-    if not is_integrity_error:
+    if not _is_integrity_error(exc):
         return False
+    driver_exc = _driver_error(exc)
     code = getattr(driver_exc, "sqlite_errorcode", None)  # Python 3.11+
     if isinstance(code, int):
         return code in (_SQLITE_CONSTRAINT_UNIQUE, _SQLITE_CONSTRAINT_PRIMARYKEY)
-    sqlstate = getattr(driver_exc, "pgcode", None) or getattr(driver_exc, "sqlstate", None)
-    if isinstance(sqlstate, str) and sqlstate:
+    sqlstate = _sqlstate(driver_exc)
+    if sqlstate is not None:
         return sqlstate == _PG_UNIQUE_VIOLATION
     return "unique" in str(driver_exc).lower()
 
 
-def describe_error(exc: BaseException) -> str:
-    """``Type: first line of the driver message``, without SQL text or bound values."""
+def commit_stored_nothing(exc: BaseException) -> bool:
+    """True when a COMMIT that raised ``exc`` is known to have stored nothing.
+
+    SQLite keeps the transaction open, uncommitted, after SQLITE_BUSY or
+    SQLITE_LOCKED; a constraint violation (for example a deferred one) commits
+    nothing; and PostgreSQL SQLSTATE class 40 (serialization failure, deadlock)
+    means the server rolled back. Any other failure, notably a lost connection,
+    leaves the outcome unknown.
+    """
     driver_exc = _driver_error(exc)
+    if _is_sqlite_busy(driver_exc) or _is_integrity_error(exc):
+        return True
+    sqlstate = _sqlstate(driver_exc)
+    return sqlstate is not None and sqlstate.startswith(_PG_TRANSACTION_ROLLBACK_CLASS)
+
+
+def describe_error(exc: BaseException) -> str:
+    """A diagnostic that carries no data values.
+
+    It holds the driver error's type, its SQLite or SQLSTATE code when the driver
+    provides one, and the first line of its message cut at the first quote.
+    Drivers quote offending values (PostgreSQL: ``invalid input syntax for type
+    integer: "..."``), so quoted text, SQL text and later lines are never kept.
+    """
+    driver_exc = _driver_error(exc)
+    label = type(driver_exc).__name__
+    code = getattr(driver_exc, "sqlite_errorname", None) or _sqlstate(driver_exc)
+    if isinstance(code, str) and code:
+        label = f"{label} [{code}]"
     lines = str(driver_exc).splitlines()
-    name = type(driver_exc).__name__
-    return f"{name}: {lines[0]}" if lines else name
+    detail = lines[0].strip() if lines else ""
+    quote = _QUOTE.search(detail)
+    if quote:
+        detail = f"{detail[: quote.start()].rstrip()} <redacted>".lstrip()
+    return f"{label}: {detail}" if detail else label
 
 
 def _crossed_power_of_two(before: int, after: int) -> bool:
@@ -124,8 +175,10 @@ class SQLBatchWriter:
     """Queue events in memory and insert them in batches from a daemon thread.
 
     Subclasses implement ``_write_batch(events)``, which must insert every event
-    in one transaction and raise, with nothing committed, on failure. They call
-    ``_start()`` once their tables exist, or ``_disable()`` when they cannot.
+    in one transaction and raise, with nothing committed, on failure; it commits
+    through ``_commit()`` so a COMMIT with an unknown outcome is never replayed.
+    They call ``_start()`` once their tables exist, or ``_disable()`` when they
+    cannot.
     """
 
     sink_name = "sql"
@@ -149,7 +202,7 @@ class SQLBatchWriter:
         self.available = True
         # Fatal: the writer could not start. Write errors only set last_error.
         self.error: str | None = None
-        # Most recent write error; diagnostic only, the writer keeps running.
+        # Most recent write error (see describe_error); the writer keeps running.
         self.last_error: str | None = None
         self.engine: Any = None
         self.thread: threading.Thread | None = None
@@ -157,6 +210,8 @@ class SQLBatchWriter:
         self._queue: deque[Dict[str, Any]] = deque()
         self._in_flight = 0
         self._deadline: float | None = None
+        # Set when stop() returned while a write was still running.
+        self._stopped_early = False
         self._counts: Dict[str, int] = dict.fromkeys(_COUNTERS, 0)
 
     def _disable(self, error: str) -> None:
@@ -171,6 +226,16 @@ class SQLBatchWriter:
 
     def _write_batch(self, events: List[Dict[str, Any]]) -> None:
         raise NotImplementedError
+
+    def _commit(self, commit: Callable[[], Any]) -> None:
+        """Run ``commit``. If it fails and the rows may already be stored, raise
+        ``CommitOutcomeUnknown`` so the write is counted as ``in_doubt``, not replayed."""
+        try:
+            commit()
+        except Exception as exc:
+            if commit_stored_nothing(exc):
+                raise
+            raise CommitOutcomeUnknown(f"commit outcome unknown: {describe_error(exc)}") from exc
 
     def enqueue(self, event: Dict[str, Any]) -> bool:
         """Queue ``event``; False when the writer is stopped or unavailable.
@@ -205,8 +270,9 @@ class SQLBatchWriter:
         """Snapshot of the delivery counters.
 
         ``pending`` is measured (queued plus in-flight events), so the invariant
-        ``enqueued == written + duplicates + failed + dropped + pending`` is a
-        real consistency check, with ``dropped = dropped_queue_full + dropped_on_stop``.
+        ``enqueued == written + duplicates + failed + in_doubt + dropped + pending``
+        is a real consistency check, with ``dropped = dropped_queue_full +
+        dropped_on_stop``.
         """
         with self._cond:
             counts = dict(self._counts)
@@ -226,8 +292,9 @@ class SQLBatchWriter:
         No batch is taken, and no retry or row-by-row attempt starts, after that
         deadline: events still queued are counted as ``dropped_on_stop`` and events
         whose write was cut short as ``failed``, never lost silently. A write that
-        is already running is not interrupted; its events stay ``pending`` until it
-        finishes.
+        is already running is not interrupted: its events stay ``pending`` when
+        this returns, and the counters are logged as ``sql_sink_late_outcome`` once
+        it finishes.
         """
         bound = self.stop_timeout_s if timeout_s is None else max(0.0, timeout_s)
         with self._cond:
@@ -245,18 +312,24 @@ class SQLBatchWriter:
             thread.join(max(0.0, deadline - time.monotonic()))
         with self._cond:
             self._drop_queued()
+            self._stopped_early = thread is not None and thread.is_alive()
         stats = self.stats()
-        if stats["failed"] or stats["dropped"] or stats["pending"]:
-            _LOGGER.warning(
-                "sql_sink_stopped_with_undelivered_events sink=%s written=%d "
-                "duplicates=%d failed=%d dropped=%d pending=%d",
-                self.sink_name,
-                stats["written"],
-                stats["duplicates"],
-                stats["failed"],
-                stats["dropped"],
-                stats["pending"],
-            )
+        if stats["failed"] or stats["in_doubt"] or stats["dropped"] or stats["pending"]:
+            self._log_summary("sql_sink_stopped_with_undelivered_events")
+
+    def _log_summary(self, event: str) -> None:
+        stats = self.stats()
+        _LOGGER.warning(
+            "%s sink=%s written=%d duplicates=%d failed=%d in_doubt=%d dropped=%d pending=%d",
+            event,
+            self.sink_name,
+            stats["written"],
+            stats["duplicates"],
+            stats["failed"],
+            stats["in_doubt"],
+            stats["dropped"],
+            stats["pending"],
+        )
 
     def _past_deadline(self) -> bool:
         deadline = self._deadline
@@ -315,10 +388,13 @@ class SQLBatchWriter:
             self.last_error = describe_error(exc)
         with self._cond:
             failed_before = self._counts["failed"]
+            in_doubt_before = self._counts["in_doubt"]
             for name, count in outcome.items():
                 self._counts[name] += count
             self._in_flight = 0
             failed_after = self._counts["failed"]
+            in_doubt_after = self._counts["in_doubt"]
+            finished_after_stop = self._stopped_early
         if _crossed_power_of_two(failed_before, failed_after):
             _LOGGER.warning(
                 "sql_sink_write_failed sink=%s failed_total=%d last_error=%s",
@@ -326,14 +402,26 @@ class SQLBatchWriter:
                 failed_after,
                 self.last_error,
             )
+        if _crossed_power_of_two(in_doubt_before, in_doubt_after):
+            _LOGGER.warning(
+                "sql_sink_commit_outcome_unknown sink=%s in_doubt_total=%d last_error=%s",
+                self.sink_name,
+                in_doubt_after,
+                self.last_error,
+            )
+        if finished_after_stop:
+            # stop() already returned with this batch pending: report its outcome.
+            self._log_summary("sql_sink_late_outcome")
 
     def _deliver(self, batch: List[Dict[str, Any]], outcome: Dict[str, int]) -> None:
         error = self._write_with_retry(batch)
         if error is None:
             outcome["written"] += len(batch)
             return
-        if len(batch) == 1 or is_transient_error(error):
-            # Nothing to isolate, or retries ran out (or reached the stop deadline).
+        if len(batch) == 1 or is_transient_error(error) or isinstance(error, CommitOutcomeUnknown):
+            # Nothing to isolate; or retries ran out (or reached the stop deadline);
+            # or the rows may already be stored, so inserting them again could
+            # store them twice.
             outcome[self._outcome_of(error)] += len(batch)
             return
         # The failed batch was rolled back. Insert its rows one by one so a single
@@ -347,6 +435,9 @@ class SQLBatchWriter:
 
     def _outcome_of(self, error: Exception) -> str:
         """Final classification of a write error; duplicates are not errors."""
+        if isinstance(error, CommitOutcomeUnknown):
+            self.last_error = str(error)
+            return "in_doubt"
         if is_duplicate_error(error):
             return "duplicates"
         self.last_error = describe_error(error)
