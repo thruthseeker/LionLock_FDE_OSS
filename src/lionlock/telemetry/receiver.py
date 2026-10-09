@@ -5,11 +5,14 @@ Run it on infrastructure you control, behind a TLS-terminating reverse proxy::
     lionlock-telemetry serve --data-dir /var/lib/lionlock-telemetry --port 8787
 
 Every upload is treated as hostile input. The body is size-capped before and after gzip
-decompression, checked against its declared SHA-256, and written to a quarantine directory.
-The file is then opened read-only with SQLite's hardening options. It must match the snapshot
-schema exactly, pass ``PRAGMA quick_check``, reproduce its content digest, and come through a
-re-run of the export policy unchanged before any row reaches the warehouse. Uploads are
-idempotent, and client IP addresses are never logged or stored.
+decompression and checked against its declared SHA-256. Its raw bytes then exist only in an
+owner-only file under ``quarantine/`` while they are validated: opened read-only with SQLite's
+hardening options, the file must match the snapshot schema exactly, pass ``PRAGMA quick_check``,
+reproduce its content digest, and come through a re-run of the export policy unchanged. The
+validated rows are then rebuilt into a fresh file, and only that rebuild is stored. Uploaded
+bytes are deleted whether the upload is accepted or rejected; a rejection keeps only its reason.
+Uploads are idempotent per (install, segment), and client IP addresses are never logged or
+stored.
 """
 
 from __future__ import annotations
@@ -39,7 +42,8 @@ from .snapshot import (
     DEFAULT_MAX_SNAPSHOT_BYTES,
     SnapshotError,
     SnapshotInfo,
-    validate_snapshot,
+    rebuild_clean,
+    validate_snapshot_bytes,
 )
 from .upload import CONTENT_TYPE, UPLOAD_PATH
 
@@ -52,14 +56,19 @@ DEFAULT_MAX_CONCURRENT_UPLOADS = 4
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
+# v2: uploads are keyed by (install_id, segment_index) and record the SHA-256 of the received
+# file and of the rebuilt file kept in accepted/ separately. Older warehouses are refused.
+WAREHOUSE_SCHEMA_VERSION = 2
+
 WAREHOUSE_DDL: Tuple[str, ...] = (
     "CREATE TABLE IF NOT EXISTS uploads ("
-    "file_sha256 TEXT PRIMARY KEY NOT NULL, "
     "install_id TEXT NOT NULL, "
     "segment_index INTEGER NOT NULL, "
     "content_digest TEXT NOT NULL, "
     "prev_segment_digest TEXT NOT NULL, "
     "chain_status TEXT NOT NULL, "
+    "received_sha256 TEXT NOT NULL, "
+    "stored_sha256 TEXT NOT NULL, "
     "received_hour TEXT NOT NULL, "
     "lionlock_version TEXT NOT NULL, "
     "python TEXT NOT NULL, "
@@ -68,7 +77,8 @@ WAREHOUSE_DDL: Tuple[str, ...] = (
     "events_pruned_before_export INTEGER NOT NULL, "
     "trust_records_rows INTEGER NOT NULL, "
     "trust_records_pruned_before_export INTEGER NOT NULL, "
-    "UNIQUE (install_id, segment_index))",
+    "PRIMARY KEY (install_id, segment_index))",
+    "CREATE INDEX IF NOT EXISTS uploads_by_received_sha256 ON uploads (received_sha256)",
     "CREATE TABLE IF NOT EXISTS events ("
     "install_id TEXT NOT NULL, "
     "seq INTEGER NOT NULL, "
@@ -152,12 +162,31 @@ def gunzip_capped(data: bytes, limit: int) -> bytes:
     return bytes(output)
 
 
+class WarehouseVersionError(RuntimeError):
+    """Raised when ``warehouse.db`` was created with a different layout than this receiver's."""
+
+
 def init_warehouse(path: Path) -> None:
+    """Create the warehouse, or confirm an existing one already uses this layout.
+
+    Older layouts are refused rather than migrated, so a stored value never changes meaning.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), isolation_level=None)
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        tables = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'")
+        if version != WAREHOUSE_SCHEMA_VERSION and (version != 0 or tables.fetchone()[0]):
+            conn.execute("ROLLBACK")
+            raise WarehouseVersionError(
+                f"{path.name} uses warehouse layout v{version or 1}, but this receiver writes "
+                f"v{WAREHOUSE_SCHEMA_VERSION}; start it with a new data directory"
+            )
         for ddl in WAREHOUSE_DDL:
             conn.execute(ddl)
+        conn.execute(f"PRAGMA user_version={WAREHOUSE_SCHEMA_VERSION}")
+        conn.execute("COMMIT")
     finally:
         conn.close()
 
@@ -223,38 +252,40 @@ class Receiver:
         else:
             return _error(415, "unsupported content encoding")
 
-        file_sha = hashlib.sha256(data).hexdigest()
-        if lowered.get("x-lionlock-file-sha256", "").strip().lower() != file_sha:
+        received_sha = hashlib.sha256(data).hexdigest()
+        if lowered.get("x-lionlock-file-sha256", "").strip().lower() != received_sha:
             return _error(400, "X-LionLock-File-SHA256 does not match the body")
         install_id = lowered.get("x-lionlock-install-id", "").strip().lower()
         if not _HEX32.fullmatch(install_id):
             return _error(400, "missing or malformed X-LionLock-Install-Id")
-        if (self.accepted_dir / f"{file_sha}.db").exists():
-            return IngestResult(200, {"status": "duplicate", "file_sha256": file_sha})
+        if self._already_received(received_sha):
+            return IngestResult(200, {"status": "duplicate", "file_sha256": received_sha})
         if not self._within_rate(install_id):
             return _error(429, "upload rate limit exceeded", {"Retry-After": "3600"})
 
-        quarantined = self.quarantine_dir / f"{file_sha}-{uuid.uuid4().hex}.db"
-        quarantined.write_bytes(data)
         try:
-            info = validate_snapshot(quarantined, max_bytes=limit)
+            info = validate_snapshot_bytes(data, max_bytes=limit, work_dir=self.quarantine_dir)
             self._check_headers(lowered, info)
+            clean = rebuild_clean(info, work_dir=self.quarantine_dir)
         except SnapshotError as exc:
-            self._reject(quarantined, file_sha, str(exc))
+            self._reject(received_sha, str(exc))
             return _error(422, str(exc))
 
-        outcome = self._ingest(file_sha, info)
+        stored_sha = hashlib.sha256(clean).hexdigest()
+        outcome = self._ingest(received_sha, stored_sha, info)
         if outcome == "conflict":
             message = "segment was already received with different content"
-            self._reject(quarantined, file_sha, message)
+            self._reject(received_sha, message)
             return _error(409, message)
-        os.replace(quarantined, self.accepted_dir / f"{file_sha}.db")
-        body_out = {
+        body_out: Dict[str, Any] = {
             "status": outcome,
-            "file_sha256": file_sha,
+            "file_sha256": received_sha,
             "install_id": info.install_id,
             "segment_index": info.segment_index,
         }
+        if outcome == "created":
+            self._store(stored_sha, clean)
+            body_out["stored_sha256"] = stored_sha
         return IngestResult(201 if outcome == "created" else 200, body_out)
 
     def _check_headers(self, headers: Mapping[str, str], info: SnapshotInfo) -> None:
@@ -281,43 +312,65 @@ class Receiver:
             self._rate[install_id] = (hour, count + 1)
         return True
 
-    def _reject(self, quarantined: Path, file_sha: str, reason: str) -> None:
-        target = self.rejected_dir / f"{file_sha}.db"
-        os.replace(quarantined, target)
-        target.with_name(target.name + ".reason.txt").write_text(reason + "\n", encoding="utf-8")
+    def _already_received(self, received_sha: str) -> bool:
+        conn = sqlite3.connect(str(self.warehouse_path), timeout=30)
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM uploads WHERE received_sha256 = ? LIMIT 1", (received_sha,)
+            ).fetchone()
+        finally:
+            conn.close()
+        return row is not None
 
-    def _ingest(self, file_sha: str, info: SnapshotInfo) -> str:
+    def _store(self, stored_sha: str, clean: bytes) -> None:
+        target = self.accepted_dir / f"{stored_sha}.db"
+        partial = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+        partial.write_bytes(clean)
+        os.replace(partial, target)
+
+    def _reject(self, received_sha: str, reason: str) -> None:
+        """Record why an upload was refused. The uploaded bytes themselves are not kept."""
+        note = self.rejected_dir / f"{received_sha}.reason.txt"
+        note.write_text(reason + "\n", encoding="utf-8")
+
+    def _ingest(self, received_sha: str, stored_sha: str, info: SnapshotInfo) -> str:
+        """Merge a validated segment once. Its logical content decides duplicate vs conflict,
+        so the same segment in a bytewise-different file is a duplicate, not a conflict."""
         meta = info.meta
         with self._ingest_lock:
             conn = sqlite3.connect(str(self.warehouse_path), timeout=30, isolation_level=None)
             try:
                 conn.execute("BEGIN IMMEDIATE")
                 existing = conn.execute(
-                    "SELECT file_sha256 FROM uploads WHERE file_sha256 = ? "
-                    "OR (install_id = ? AND segment_index = ?)",
-                    (file_sha, info.install_id, info.segment_index),
+                    "SELECT content_digest FROM uploads WHERE install_id = ? AND segment_index = ?",
+                    (info.install_id, info.segment_index),
                 ).fetchone()
                 if existing is not None:
                     conn.execute("ROLLBACK")
-                    return "duplicate" if existing[0] == file_sha else "conflict"
-                conn.execute(
-                    "INSERT INTO uploads VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        file_sha,
-                        info.install_id,
-                        info.segment_index,
-                        info.content_digest,
-                        meta["prev_segment_digest"],
-                        self._chain_status(conn, info),
-                        _current_hour(),
-                        meta["lionlock_version"],
-                        meta["python"],
-                        meta["platform"],
-                        int(meta["events_rows"]),
-                        int(meta["events_pruned_before_export"]),
-                        int(meta["trust_records_rows"]),
-                        int(meta["trust_records_pruned_before_export"]),
+                    return "duplicate" if existing[0] == info.content_digest else "conflict"
+                upload: Dict[str, Any] = {
+                    "install_id": info.install_id,
+                    "segment_index": info.segment_index,
+                    "content_digest": info.content_digest,
+                    "prev_segment_digest": meta["prev_segment_digest"],
+                    "chain_status": self._chain_status(conn, info),
+                    "received_sha256": received_sha,
+                    "stored_sha256": stored_sha,
+                    "received_hour": _current_hour(),
+                    "lionlock_version": meta["lionlock_version"],
+                    "python": meta["python"],
+                    "platform": meta["platform"],
+                    "events_rows": int(meta["events_rows"]),
+                    "events_pruned_before_export": int(meta["events_pruned_before_export"]),
+                    "trust_records_rows": int(meta["trust_records_rows"]),
+                    "trust_records_pruned_before_export": int(
+                        meta["trust_records_pruned_before_export"]
                     ),
+                }
+                conn.execute(
+                    f"INSERT INTO uploads ({','.join(upload)}) "
+                    f"VALUES ({','.join('?' for _ in upload)})",
+                    tuple(upload.values()),
                 )
                 for table in DATA_TABLES:
                     columns = ("install_id", *COLUMNS[table])

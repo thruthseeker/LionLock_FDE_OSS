@@ -48,6 +48,26 @@ BADGES = ("INSUFFICIENT_DATA", "STABLE", "VOLATILE", "DRIFTING", "RECOVERING", "
 TRIGGER_FLAGS = ("score_below_threshold", "drift_detected", "volatility_spike")
 PLATFORMS = {"linux": "linux", "darwin": "macos", "windows": "windows", "freebsd": "freebsd"}
 
+# Public label values. A private name can look like an identifier or a version string, so these
+# fields are checked for membership, never for shape. tests/test_telemetry_export.py keeps each
+# set equal to the constants the OSS code emits.
+REASON_CODES = (
+    "repetition_loop",
+    "low_novelty",
+    "low_coherence",
+    "context_drift",
+    "hallucination_risk",
+    "fatigue_risk",
+    "congestion_risk",
+    "policy_violation",
+    "connector_error",
+)
+SIGNAL_SCHEMA_VERSIONS = ("SE-0.2.0", "SE-0.3.0", "SE-0.4.0")
+TRUST_LOGIC_VERSIONS = ("TO-0.1.0",)
+RUNTIME_MODES = ("oss",)
+UNKNOWN_VERSION = "unknown"
+DEV_PACKAGE_VERSION = "0.0.0-dev"
+
 MAX_DURATION_MS = 86_400_000
 MAX_TURN_INDEX = 1_000_000_000
 
@@ -91,8 +111,11 @@ _MODEL_FAMILY_PATTERNS = tuple(
 
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
-_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
-_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$")
+# Numeric release versions only (PEP 440 public form without local labels), so no name fits.
+_RELEASE_VERSION = re.compile(
+    r"^[0-9]{1,4}(?:\.[0-9]{1,4}){1,3}(?:(?:a|b|rc)[0-9]{1,4})?(?:\.post[0-9]{1,4})?"
+    r"(?:\.dev[0-9]{1,4})?$"
+)
 
 
 def rekey(export_key: str, namespace: str, value: str) -> str:
@@ -149,16 +172,22 @@ def enum_or_none(value: Any, allowed: Tuple[str, ...]) -> str | None:
     return value if isinstance(value, str) and value in allowed else None
 
 
-def identifier_or_none(value: Any) -> str | None:
-    return value if isinstance(value, str) and _IDENTIFIER.fullmatch(value) else None
-
-
 def hex64_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) and _HEX64.fullmatch(value) else None
 
 
-def version_label(value: Any) -> str:
-    return value if isinstance(value, str) and _VERSION.fullmatch(value) else "unknown"
+def signal_schema_version(value: Any) -> str:
+    """A public signal schema version, or ``unknown``; never a guess at the real version."""
+    return value if enum_or_none(value, SIGNAL_SCHEMA_VERSIONS) else UNKNOWN_VERSION
+
+
+def package_version_label(value: Any) -> str:
+    """A numeric release version (or the OSS ``0.0.0-dev`` fallback), else ``unknown``."""
+    if isinstance(value, str) and (
+        value == DEV_PACKAGE_VERSION or _RELEASE_VERSION.fullmatch(value)
+    ):
+        return value
+    return UNKNOWN_VERSION
 
 
 def platform_label(system: Any) -> str:
@@ -219,7 +248,7 @@ def signal_bundle(value: Any) -> Dict[str, Any] | None:
             if item in MISSING_INPUT_KEYS and item not in missing_inputs:
                 missing_inputs.append(item)
     return {
-        "signal_schema_version": version_label(value.get("signal_schema_version")),
+        "signal_schema_version": signal_schema_version(value.get("signal_schema_version")),
         "signal_scores": _unit_map(value.get("signal_scores"), SIGNAL_KEYS),
         "derived_signals": _unit_map(value.get("derived_signals"), DERIVED_KEYS),
         "missing_inputs": missing_inputs,
@@ -327,13 +356,13 @@ def trust_detail(value: Any) -> Dict[str, Any]:
         "signal_summary": _signal_summary(value.get("signal_summary")),
         "model_params": _model_params(value.get("model_params")),
     }
-    trust_logic_version = value.get("trust_logic_version")
-    if isinstance(trust_logic_version, str) and _VERSION.fullmatch(trust_logic_version):
+    trust_logic_version = enum_or_none(value.get("trust_logic_version"), TRUST_LOGIC_VERSIONS)
+    if trust_logic_version is not None:
         detail["trust_logic_version"] = trust_logic_version
     fingerprint = hex64_or_none(value.get("code_fingerprint"))
     if fingerprint is not None:
         detail["code_fingerprint"] = fingerprint
-    runtime_mode = identifier_or_none(value.get("runtime_mode"))
+    runtime_mode = enum_or_none(value.get("runtime_mode"), RUNTIME_MODES)
     if runtime_mode is not None:
         detail["runtime_mode"] = runtime_mode
     return detail
@@ -379,7 +408,7 @@ def event_row(
         hour_bucket(ts),
         decision if decision in DECISIONS else "UNKNOWN",
         enum_or_none(severity, SEVERITIES),
-        identifier_or_none(reason_code),
+        enum_or_none(reason_code, REASON_CODES),
         unit_interval(aggregate_score),
         canonical_json(signal_scores(scores)),
         canonical_json(sanitized_bundle) if sanitized_bundle is not None else None,

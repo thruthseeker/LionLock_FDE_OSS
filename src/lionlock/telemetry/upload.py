@@ -4,8 +4,9 @@ Nothing here runs unless you opt in. Uploads are refused unless ``telemetry_uplo
 true (or ``LIONLOCK_TELEMETRY_UPLOAD=on``) and an endpoint is configured, and they are always
 refused while ``DO_NOT_TRACK`` is set. The endpoint must use HTTPS (plain HTTP is allowed only
 for localhost) and may not embed credentials. Redirects are never followed, so a bearer token
-cannot be forwarded to another host. Every snapshot is re-validated against the export policy
-immediately before it is sent.
+cannot be forwarded to another host. Immediately before sending, each outbox file is read once,
+re-validated against the export policy, and rebuilt from its validated rows; only the rebuilt
+bytes are sent, never the outbox file itself.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from lionlock.versioning import get_lionlock_version
 from . import policy
 from .canonical import utc_now_iso
 from .export import DEFAULT_ROWS_PER_SNAPSHOT, export_all, pending_snapshots
-from .snapshot import SnapshotError, validate_snapshot
+from .snapshot import SnapshotError, read_capped, rebuild_clean, validate_snapshot_bytes
 from .store import open_store, resolve_sqlite_path
 
 UPLOAD_PATH = "/v1/snapshots"
@@ -247,27 +248,29 @@ def _classify(name: str, status: int, retry_after: float | None = None) -> Uploa
 
 
 def upload_snapshot(path: Path, settings: UploadSettings) -> UploadOutcome:
-    """Send one sealed snapshot. Raises ``UploadDisabledError`` if uploads are not allowed."""
+    """Send one sealed snapshot. Raises ``UploadDisabledError`` if uploads are not allowed.
+
+    The request body is the gzip of a file rebuilt from the snapshot's validated rows, and the
+    transport hashes describe exactly those bytes. ``path`` is read once and never modified.
+    """
     if not settings.allowed:
         raise UploadDisabledError(settings.blocked_reason or "uploads are disabled")
-    raw = path.read_bytes()
-    file_sha = hashlib.sha256(raw).hexdigest()
     try:
-        info = validate_snapshot(path)
+        info = validate_snapshot_bytes(read_capped(path))
+        payload = rebuild_clean(info)
     except SnapshotError as exc:
         return UploadOutcome(path.name, "invalid", None, str(exc))
-    if hashlib.sha256(path.read_bytes()).hexdigest() != file_sha:
-        return UploadOutcome(path.name, "invalid", None, "snapshot changed while being uploaded")
-    body = gzip.compress(raw, mtime=0)
+    body = gzip.compress(payload, mtime=0)
     if len(body) > MAX_UPLOAD_BYTES:
         return UploadOutcome(path.name, "invalid", None, "snapshot is too large to upload")
+    payload_sha = hashlib.sha256(payload).hexdigest()
 
     headers = {
         "Content-Type": CONTENT_TYPE,
         "Content-Encoding": "gzip",
-        "User-Agent": f"lionlock/{policy.version_label(get_lionlock_version({}))}",
-        "Idempotency-Key": file_sha,
-        "X-LionLock-File-SHA256": file_sha,
+        "User-Agent": f"lionlock/{policy.package_version_label(get_lionlock_version({}))}",
+        "Idempotency-Key": payload_sha,
+        "X-LionLock-File-SHA256": payload_sha,
         "X-LionLock-Content-Digest": info.content_digest,
         "X-LionLock-Install-Id": info.install_id,
         "X-LionLock-Segment": str(info.segment_index),

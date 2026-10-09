@@ -1,6 +1,7 @@
 import gzip
 import hashlib
 import logging
+import os
 import shutil
 import sqlite3
 import threading
@@ -11,15 +12,24 @@ from pathlib import Path
 import pytest
 
 from lionlock.logging.token_auth import hash_token
+from lionlock.telemetry import snapshot as snapshot_module
+from lionlock.telemetry import upload as upload_module
 from lionlock.telemetry.export import export_snapshot, pending_snapshots
 from lionlock.telemetry.receiver import (
+    WAREHOUSE_SCHEMA_VERSION,
     Receiver,
     ReceiverConfig,
+    WarehouseVersionError,
     gunzip_capped,
     load_token_hashes,
     make_server,
 )
-from lionlock.telemetry.snapshot import file_sha256, validate_snapshot, write_snapshot
+from lionlock.telemetry.snapshot import (
+    SnapshotError,
+    file_sha256,
+    validate_snapshot,
+    write_snapshot,
+)
 from lionlock.telemetry.store import LogStore
 from lionlock.telemetry.upload import (
     CONTENT_TYPE,
@@ -226,7 +236,14 @@ def test_receiver_rejects_rows_that_violate_the_policy(tmp_path) -> None:
     result = receiver.handle_upload(_upload_headers_unchecked(forged), forged.read_bytes())
     assert result.status == 422
     assert "export policy" in result.body["error"]
-    assert list((tmp_path / "server" / "rejected").glob("*.db"))
+    # A rejection is recorded by its reason alone; the uploaded file is not kept anywhere.
+    rejected = tmp_path / "server" / "rejected"
+    assert list(rejected.glob("*.db")) == []
+    reasons = list(rejected.glob("*.reason.txt"))
+    assert [path.name for path in reasons] == [f"{file_sha256(forged)}.reason.txt"]
+    note = reasons[0].read_text(encoding="utf-8")
+    assert "export policy" in note and "salaries" not in note
+    assert [p for p in (tmp_path / "server" / "quarantine").rglob("*") if p.is_file()] == []
     assert _warehouse(tmp_path, "SELECT COUNT(*) FROM events") == [(0,)]
 
 
@@ -438,3 +455,75 @@ def test_gzip_body_is_reproducible(tmp_path) -> None:
     assert hashlib.sha256(gunzip_capped(gzip.compress(raw, mtime=0), len(raw))).hexdigest() == (
         file_sha256(path)
     )
+
+
+def test_receiver_stores_a_rebuild_and_records_both_digests(tmp_path) -> None:
+    path = _exported(tmp_path)
+    padded = tmp_path / "padded.db"
+    padded.write_bytes(path.read_bytes() + b"bytes after the last database page")
+    receiver = Receiver(ReceiverConfig(data_dir=tmp_path / "server"))
+    result = receiver.handle_upload(_upload_headers_unchecked(padded), padded.read_bytes())
+    assert result.status == 201
+
+    query = "SELECT received_sha256, stored_sha256 FROM uploads"
+    [(received, stored)] = _warehouse(tmp_path, query)
+    assert received == file_sha256(padded) == result.body["file_sha256"]
+    assert stored == result.body["stored_sha256"] != received
+    kept = tmp_path / "server" / "accepted" / f"{stored}.db"
+    assert file_sha256(kept) == stored
+    assert b"bytes after the last database page" not in kept.read_bytes()
+    assert validate_snapshot(kept).content_digest == validate_snapshot(path).content_digest
+    assert [p for p in (tmp_path / "server" / "quarantine").rglob("*") if p.is_file()] == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="checks POSIX permission bits")
+def test_raw_upload_bytes_live_only_in_an_owner_only_quarantine_file(tmp_path, monkeypatch):
+    seen: list = []
+    original = snapshot_module.validate_snapshot
+
+    def spy(path, **kwargs):
+        seen.append((path, path.stat().st_mode & 0o777, path.parent.stat().st_mode & 0o777))
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(snapshot_module, "validate_snapshot", spy)
+    path = _exported(tmp_path)
+    receiver = Receiver(ReceiverConfig(data_dir=tmp_path / "server"))
+    assert receiver.handle_upload(_upload_headers(path), path.read_bytes()).status == 201
+    raw_copy, file_mode, dir_mode = seen[0]
+    assert raw_copy.parent.parent == tmp_path / "server" / "quarantine"
+    assert (file_mode, dir_mode) == (0o600, 0o700)
+    assert not raw_copy.parent.exists()
+
+
+def test_uploader_fails_closed_when_the_rebuild_fails(tmp_path, monkeypatch) -> None:
+    def broken(_info, **_kwargs):
+        raise SnapshotError("rebuilt snapshot does not reproduce the validated content")
+
+    monkeypatch.setattr(upload_module, "rebuild_clean", broken)
+    server, handler, url = _stub([])
+    try:
+        path = _exported(tmp_path)
+        settings = resolve_upload_settings(_config(tmp_path, endpoint=url, enabled=True))
+        outcome = upload_snapshot(path, settings)
+        assert outcome.status == "invalid"
+        assert handler.seen == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_receiver_refuses_a_warehouse_with_an_older_layout(tmp_path) -> None:
+    old = tmp_path / "old"
+    old.mkdir()
+    with sqlite3.connect(old / "warehouse.db") as conn:
+        conn.execute("CREATE TABLE uploads (file_sha256 TEXT PRIMARY KEY NOT NULL)")
+    before = file_sha256(old / "warehouse.db")
+    with pytest.raises(WarehouseVersionError, match="new data directory"):
+        Receiver(ReceiverConfig(data_dir=old))
+    assert file_sha256(old / "warehouse.db") == before
+
+    fresh = tmp_path / "fresh"
+    Receiver(ReceiverConfig(data_dir=fresh))
+    Receiver(ReceiverConfig(data_dir=fresh))
+    with sqlite3.connect(fresh / "warehouse.db") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == WAREHOUSE_SCHEMA_VERSION

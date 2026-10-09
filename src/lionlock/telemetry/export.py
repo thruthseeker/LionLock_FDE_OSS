@@ -158,7 +158,7 @@ def export_snapshot(
             "install_id": identity.install_id,
             "segment_index": str(segment_index),
             "prev_segment_digest": state.get("export:last_digest", ""),
-            "lionlock_version": policy.version_label(get_lionlock_version({})),
+            "lionlock_version": policy.package_version_label(get_lionlock_version({})),
             "python": policy.python_label(platform.python_version()),
             "platform": policy.platform_label(platform.system()),
         }

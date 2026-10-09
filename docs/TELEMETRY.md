@@ -12,6 +12,9 @@ receiver you run. Every upload can be inspected before it is sent.
   the machine. There is no path for prompts, responses, or other free text.
 - **Verifiable.** Snapshots have a deterministic content digest, and the receiver re-applies the
   same export policy to every uploaded row.
+- **Rebuilt, never copied.** The file that is sent, and the file the receiver keeps, are rebuilt
+  from validated rows. Bytes hidden inside a SQLite file, such as appended data or the residue
+  of deleted rows, cannot travel with it.
 
 ## How it works
 
@@ -28,7 +31,8 @@ receiver you run. Every upload can be inspected before it is sent.
                    │  lionlock-telemetry upload      (opt-in; HTTPS; idempotent)
                    ▼
              receiver you control                    validates as untrusted input
-               ├── accepted/<sha256>.db              raw snapshots, content-addressed
+               ├── accepted/<sha256>.db              clean rebuilds, named by their own SHA-256
+               ├── rejected/<sha256>.reason.txt      the reason only, never the uploaded file
                └── warehouse.db                      merged tables for analysis
 ```
 
@@ -79,8 +83,10 @@ The client enforces these rules:
 - The endpoint must use `https://`. Plain `http://` is accepted only for `localhost`.
 - Endpoints that embed credentials, query strings, or fragments are refused.
 - Redirects are never followed, so a token can never be forwarded to another host.
-- Before each send, every snapshot is re-validated against the export policy. A file that fails
-  (for example, one edited by hand in the outbox) is moved to `outbox/rejected/` and never sent.
+- Before each send, the outbox file is read once, re-validated against the export policy, and
+  rebuilt from its validated rows. Only the rebuilt file is sent, never the outbox file itself,
+  and the transport hashes describe the bytes actually sent. A file that fails validation (for
+  example, one edited by hand in the outbox) is moved to `outbox/rejected/` and never sent.
 - Snapshots the server rejects as invalid (400, 409, 413, 415, 422) are set aside in
   `outbox/rejected/`. On a network error, 408, 429, or 5xx the client retries with backoff. On
   401, 403, or any other unexpected response it stops. In every case except a rejection, the file
@@ -114,11 +120,11 @@ Placed in another machine's outbox, they are uploaded by `lionlock-telemetry upl
 
 | Key | Value |
 |---|---|
-| `format`, `schema_version` | `lionlock-telemetry-snapshot`, `1` |
+| `format`, `schema_version` | `lionlock-telemetry-snapshot`, `2` |
 | `install_id` | Random 128-bit ID, created on first export; rotate with `reset-identity` |
 | `segment_index`, `prev_segment_digest` | Segment counter and the digest of the previous segment |
 | `content_digest` | SHA-256 over the canonical content of this snapshot |
-| `lionlock_version` | Package version label |
+| `lionlock_version` | Numeric release version such as `0.1.0` (`0.0.0-dev` for an uninstalled checkout); anything else becomes `unknown` |
 | `python` | Major.minor only, for example `3.11` |
 | `platform` | `linux`, `macos`, `windows`, `freebsd`, or `other` |
 | `<table>_rows`, `<table>_pruned_before_export` | Row counts and rows lost to local pruning |
@@ -131,10 +137,10 @@ Placed in another machine's outbox, they are uploaded by `lionlock-telemetry upl
 | `ts_hour` | Event time truncated to the UTC hour |
 | `decision` | `ALLOW`, `REFRESH`, `BLOCK`, `UNKNOWN`, or `ERROR` |
 | `severity` | `green`, `yellow`, `orange`, or `red` |
-| `reason_code` | A snake_case identifier such as `hallucination_risk`; anything else is dropped |
+| `reason_code` | `repetition_loop`, `low_novelty`, `low_coherence`, `context_drift`, `hallucination_risk`, `fatigue_risk`, `congestion_risk`, `policy_violation`, or `connector_error`; anything else becomes `null` |
 | `aggregate_score` | Number in [0, 1] |
 | `signal_scores_json` | The five signal scores, each in [0, 1] |
-| `signal_bundle_json` | Signal schema version, the five signal scores, the five derived signals, and the names of missing metadata inputs |
+| `signal_bundle_json` | Signal schema version (`SE-0.2.0`, `SE-0.3.0`, or `SE-0.4.0`; anything else becomes `unknown`), the five signal scores, the five derived signals, and the names of missing metadata inputs |
 | `duration_ms` | Integer from 0 to 86,400,000 |
 | `config_hash` | SHA-256 of the gating and signal configuration |
 
@@ -152,7 +158,14 @@ Placed in another machine's outbox, they are uploaded by `lionlock-telemetry upl
 | `badge` | `INSUFFICIENT_DATA`, `STABLE`, `VOLATILE`, `DRIFTING`, `RECOVERING`, or `CLEAN_RUN` |
 | `drift_detected` | 0 or 1 |
 | `trigger_flags_json` | Subset of `score_below_threshold`, `drift_detected`, `volatility_spike` |
-| `detail_json` | Numeric confidence band and drift statistics, signal summary scores, model parameters (temperature, top_p, max_tokens, frequency and presence penalties, tool calling on or off), trust logic version, runtime mode, and the SHA-256 fingerprint of the Trust Overlay source |
+| `detail_json` | Numeric confidence band and drift statistics, signal summary scores, model parameters (temperature, top_p, max_tokens, frequency and presence penalties, tool calling on or off), trust logic version (`TO-0.1.0`, otherwise omitted), runtime mode (`oss`, otherwise omitted), and the SHA-256 fingerprint of the Trust Overlay source |
+
+Label fields carry only the public values listed above, the values LionLock itself emits. A
+private name can look exactly like an identifier or a version string, so these fields are checked
+for membership, never for shape: anything else is dropped or neutralized as shown. `unknown`
+records only that a value was not a recognized public one; replay tooling must not guess the real
+version from it. Snapshot `schema_version` 2 introduced these rules and rebuilt transfers, and a
+receiver accepts version 2 only.
 
 ### Never uploaded
 
@@ -162,7 +175,8 @@ Model names (only the family), stop sequences, seeds, free-text notes, and auth 
 timestamps (only the hour).
 
 HTTP requests carry `User-Agent: lionlock/<version>` and headers that repeat the snapshot's
-install ID, segment, and digests. The receiver sees the client's IP address at the network level.
+install ID, segment, and digests; `X-LionLock-File-SHA256` and `Idempotency-Key` are the SHA-256
+of the rebuilt file actually sent. The receiver sees the client's IP address at the network level.
 The reference receiver never logs or stores it, and your reverse proxy should be configured the
 same way (see below).
 
@@ -207,19 +221,30 @@ In order, before any row reaches the warehouse:
 
 1. Body size, both compressed and decompressed (a gzip bomb is refused at the cap).
 2. The SHA-256 of the body matches the declared `X-LionLock-File-SHA256`.
-3. The file is written to `quarantine/` and opened read-only, with `trusted_schema=OFF`,
-   `cell_size_check=ON`, and SQLite's defensive mode where Python supports it.
+3. The body is written to an owner-only file in a fresh private directory under `quarantine/`
+   and opened read-only, with `trusted_schema=OFF`, `cell_size_check=ON`, and SQLite's defensive
+   mode where Python supports it.
 4. The schema matches the snapshot schema exactly: no extra tables, views, triggers, or indexes.
 5. `PRAGMA quick_check` passes.
 6. The metadata is well-formed and the recomputed content digest matches.
 7. Every row comes through a re-run of the export policy unchanged.
 8. The upload headers agree with the snapshot metadata.
+9. The validated rows are rebuilt into a fresh snapshot file, which must reproduce the same
+   metadata, rows, and content digest, with no free pages or bytes past its last page.
 
-Accepted files move to `accepted/<sha256>.db` and are merged into `warehouse.db` in one
-transaction. Rejected files move to `rejected/` with a reason. Re-sending a file returns
-`200 duplicate`. Sending different content for a segment that was already received returns
-`409`. Each upload row records whether its `prev_segment_digest` links to the previous segment
-(`ok`, `gap`, or `broken`).
+An accepted upload is stored only as that rebuild, `accepted/<sha256>.db` named by the rebuild's
+own SHA-256, and merged into `warehouse.db` in one transaction. The uploaded bytes are deleted on
+every path; a rejection leaves only `rejected/<sha256>.reason.txt`, named by the SHA-256 of the
+received file. Keeping raw uploads would need its own sensitive-data retention policy, and the
+reference receiver has none. Duplicates are decided by content: sending a segment again returns
+`200 duplicate`, even in a bytewise-different file, while different content for a segment that
+was already received returns `409`. Each upload row records the SHA-256 of the received file
+(`received_sha256`) and of the stored rebuild (`stored_sha256`) separately, and whether its
+`prev_segment_digest` links to the previous segment (`ok`, `gap`, or `broken`).
+
+`warehouse.db` is stamped with its layout version (`PRAGMA user_version`, currently 2). The
+receiver refuses a warehouse created by an older layout rather than reinterpreting its columns;
+start it with a new data directory.
 
 For production, run the receiver as an unprivileged user in a container with a read-only root
 filesystem, a writable data volume, and memory limits.
@@ -269,7 +294,8 @@ print(f"{changed} of {len(rows)} field decisions would change under the candidat
 Each bundle records its `signal_schema_version`. Bundles from before `SE-0.3.0` carry a
 `low_conf_halluc` value computed from `1 - hallucination_risk`, which scored grounded answers as
 high risk. When replaying older data, filter on the version, or recompute that field from the
-stored signal scores with `lionlock.core.scoring.low_conf_halluc_score`.
+stored signal scores with `lionlock.core.scoring.low_conf_halluc_score`. Leave bundles marked
+`unknown` out of any version-specific replay; their real version cannot be recovered.
 
 `SE-0.4.0` changed no numbers. Every derived value it produces is identical to `SE-0.3.0` for the
 same inputs, and the signal weights, thresholds and fatigue constants are unchanged. The only
@@ -284,8 +310,8 @@ fatigue score itself is uncalibrated — see the note on `FATIGUE_SIGMOID_GAIN` 
 ### Deletion requests
 
 `lionlock-telemetry status` shows an install's `install_id`. To delete everything uploaded under
-it, remove its rows from `uploads`, `events`, and `trust_records`, along with the matching files
-in `accepted/`. `lionlock-telemetry reset-identity` rotates the install ID and pseudonymization
+it, remove its rows from `uploads`, `events`, and `trust_records`, along with the files in
+`accepted/` named by those rows' `stored_sha256`. `lionlock-telemetry reset-identity` rotates the install ID and pseudonymization
 key, so future uploads cannot be linked to past ones.
 
 ## Threat model
@@ -294,6 +320,9 @@ key, so future uploads cannot be linked to past ones.
 |---|---|
 | A code change starts exporting content | Allowlist policy; canary tests in `tests/test_telemetry_export.py` fail if any tagged value reaches a snapshot |
 | A modified client sends extra fields | The receiver requires the exact schema and re-runs the export policy on every row |
+| Bytes hidden in a snapshot file (appended data, deleted-row residue) | The uploader sends, and the receiver stores, only files rebuilt from validated rows; raw uploads are deleted after validation |
+| A private name passed off as a label or version | Label fields accept only the listed public values, in the client and the receiver alike |
+| A deliberately modified client encodes data in numeric fields | Not prevented: numbers are range-checked, not interpreted. Treat uploads from clients you do not control as untrusted |
 | A crafted SQLite file attacks the parser | Size caps, read-only defensive open, `quick_check`, schema check before any data is read; isolate the process |
 | A bearer token leaks in transit | HTTPS only, no redirects, token read from env or file and never logged; the server stores only hashes |
 | Re-identification through identifiers | Keyed HMAC pseudonyms that cannot be linked across installs; hour-level timestamps; coarse platform data; identity reset |

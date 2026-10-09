@@ -5,6 +5,11 @@ A snapshot is a small standalone SQLite file holding only policy-sanitized rows 
 meta entry and row, so it is identical for identical content on any platform and SQLite
 version. The receiver treats every snapshot as untrusted input: see ``open_untrusted`` and
 ``validate_snapshot``.
+
+Validation sees what SQL sees, and a SQLite file can carry more than that: bytes appended
+after the last page, or freed pages that still hold deleted rows. So a validated file is never
+sent or stored as-is. ``rebuild_clean`` writes the validated meta and rows into a brand-new file,
+and only those bytes are uploaded or kept.
 """
 
 from __future__ import annotations
@@ -13,7 +18,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
+import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +30,8 @@ from . import policy
 from .canonical import canonical_json
 
 SNAPSHOT_FORMAT = "lionlock-telemetry-snapshot"
-SNAPSHOT_SCHEMA_VERSION = 1
+# v2: label fields hold only public values, and transfers carry rebuilt files (docs/TELEMETRY.md).
+SNAPSHOT_SCHEMA_VERSION = 2
 SNAPSHOT_APPLICATION_ID = 0x4C4C4B53  # "LLKS"
 SQLITE_HEADER = b"SQLite format 3\x00"
 DEFAULT_MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
@@ -273,8 +281,8 @@ def _check_meta(meta: Mapping[str, str]) -> None:
     ):
         if not _COUNT.fullmatch(meta[key]):
             raise SnapshotError(f"{key} must be a non-negative integer")
-    if meta["lionlock_version"] != policy.version_label(meta["lionlock_version"]):
-        raise SnapshotError("lionlock_version is not a plain version label")
+    if meta["lionlock_version"] != policy.package_version_label(meta["lionlock_version"]):
+        raise SnapshotError("lionlock_version is not a public release version")
     if meta["python"] != policy.python_label(meta["python"]):
         raise SnapshotError("python must be a major.minor label")
     if meta["platform"] not in set(policy.PLATFORMS.values()) | {"other"}:
@@ -371,3 +379,67 @@ def validate_snapshot(path: Path, *, max_bytes: int = DEFAULT_MAX_SNAPSHOT_BYTES
         # e.g. a BLOB planted in a TEXT column cannot be canonicalized.
         raise SnapshotError(f"snapshot holds non-canonical values: {type(exc).__name__}") from exc
     return SnapshotInfo(meta=meta, rows=rows)
+
+
+def read_capped(path: Path, max_bytes: int = DEFAULT_MAX_SNAPSHOT_BYTES) -> bytes:
+    """Read a snapshot file once, refusing anything larger than ``max_bytes``."""
+    if path.stat().st_size > max_bytes:
+        raise SnapshotError("snapshot exceeds the size limit")
+    with path.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise SnapshotError("snapshot exceeds the size limit")
+    return data
+
+
+@contextmanager
+def _private_dir(parent: Path | None) -> Iterator[Path]:
+    """A fresh owner-only directory, removed with everything in it when the block exits."""
+    directory = Path(tempfile.mkdtemp(prefix="lionlock-", dir=parent))
+    try:
+        yield directory
+    finally:
+        shutil.rmtree(directory)
+
+
+def validate_snapshot_bytes(
+    data: bytes,
+    *,
+    max_bytes: int = DEFAULT_MAX_SNAPSHOT_BYTES,
+    work_dir: Path | None = None,
+) -> SnapshotInfo:
+    """Validate one captured snapshot. Its raw bytes touch disk only in an owner-only file
+    under ``work_dir`` (default: the system temp directory) that is deleted before returning.
+    """
+    if len(data) > max_bytes:
+        raise SnapshotError("snapshot exceeds the size limit")
+    with _private_dir(work_dir) as directory:
+        path = directory / "snapshot.db"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        return validate_snapshot(path, max_bytes=max_bytes)
+
+
+def rebuild_clean(info: SnapshotInfo, *, work_dir: Path | None = None) -> bytes:
+    """Write validated content into a brand-new snapshot file and return that file's bytes.
+
+    Nothing is copied from the file ``info`` was read from, so only its validated meta and rows
+    can appear in the result. The rebuilt file must validate and reproduce the same meta, rows
+    and content digest, and must have no free pages or bytes past its last page.
+    """
+    meta = {key: value for key, value in info.meta.items() if key != "content_digest"}
+    with _private_dir(work_dir) as directory:
+        path = directory / "snapshot.db"
+        write_snapshot(path, meta, info.rows)
+        rebuilt = validate_snapshot(path)
+        if rebuilt.meta != info.meta or rebuilt.rows != info.rows:
+            raise SnapshotError("rebuilt snapshot does not reproduce the validated content")
+        with open_untrusted(path) as conn:
+            page_size, page_count, free_pages = (
+                int(conn.execute(f"PRAGMA {name}").fetchone()[0])
+                for name in ("page_size", "page_count", "freelist_count")
+            )
+        if free_pages or path.stat().st_size != page_size * page_count:
+            raise SnapshotError("rebuilt snapshot is not compact")
+        return path.read_bytes()

@@ -7,15 +7,23 @@ from pathlib import Path
 
 import pytest
 
-from lionlock.core.gating import evaluate_policy
-from lionlock.core.scoring import score_response
-from lionlock.logging.event_log import build_signal_event, log_event
+from lionlock.core import gating
+from lionlock.core.gating import REASON_CODE_MAP, evaluate_policy
+from lionlock.core.scoring import SIGNAL_SCHEMA_VERSION, score_response
+from lionlock.logging.event_log import build_connector_error_event, build_signal_event, log_event
 from lionlock.telemetry import policy
 from lionlock.telemetry import store as store_module
 from lionlock.telemetry.export import export_all, export_snapshot, pending_snapshots
-from lionlock.telemetry.snapshot import SnapshotError, validate_snapshot, write_snapshot
+from lionlock.telemetry.snapshot import (
+    EVENT_COLUMNS,
+    SnapshotError,
+    validate_snapshot,
+    write_snapshot,
+)
 from lionlock.telemetry.store import LogStore
+from lionlock.trust_overlay.config import TRUST_LOGIC_VERSION_DEFAULT, resolve_runtime_mode
 from lionlock.trust_overlay.logger import append_trust_record, build_trust_record
+from lionlock.versioning import get_lionlock_version
 
 FIXED_INSTALL_ID = "0123456789abcdef0123456789abcdef"
 FIXED_EXPORT_KEY = "11" * 32
@@ -298,3 +306,70 @@ def test_trust_detail_policy_is_idempotent_and_drops_free_text() -> None:
     text = json.dumps(detail)
     for dropped in ("secret", "free text", "made-up", "Mixed", "extra", "seed"):
         assert dropped not in text
+
+
+def test_public_label_sets_match_the_values_the_code_emits() -> None:
+    connector_error = build_connector_error_event(
+        timestamp_utc="2026-09-27T10:00:00Z",
+        request_id="r",
+        base_url="http://localhost",
+        model="m",
+        duration_ms=None,
+        config_hash="c" * 64,
+    )["reason_code"]
+    emitted = set(REASON_CODE_MAP.values())
+    emitted |= {gating._reason_code_for("not_a_known_signal"), connector_error}
+    assert set(policy.REASON_CODES) == emitted
+    assert len(policy.REASON_CODES) == len(set(policy.REASON_CODES))
+    assert policy.SIGNAL_SCHEMA_VERSIONS[-1] == SIGNAL_SCHEMA_VERSION
+    assert policy.TRUST_LOGIC_VERSIONS == (TRUST_LOGIC_VERSION_DEFAULT,)
+    assert policy.RUNTIME_MODES == (resolve_runtime_mode(None),)
+    installed = get_lionlock_version({})
+    assert policy.package_version_label(installed) == installed
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("0.1.0", "0.1.0"),
+        ("1.2.3rc1", "1.2.3rc1"),
+        ("2.0.0.dev3", "2.0.0.dev3"),
+        ("1.0.0.post1", "1.0.0.post1"),
+        ("0.0.0-dev", "0.0.0-dev"),
+        ("unknown", "unknown"),
+        ("0.1.0+acme.internal", "unknown"),
+        ("acme-1.0", "unknown"),
+        ("SyntheticPrivate-Orion", "unknown"),
+        ("1", "unknown"),
+        ("", "unknown"),
+        (None, "unknown"),
+    ],
+)
+def test_package_versions_are_numeric_release_labels(value, expected) -> None:
+    assert policy.package_version_label(value) == expected
+    assert policy.package_version_label(expected) == expected
+
+
+def test_unrecognized_labels_become_neutral_and_stay_idempotent() -> None:
+    row = policy.event_row(
+        seq=1,
+        ts=None,
+        decision="ALLOW",
+        severity="green",
+        reason_code="acme_customer_reason",
+        aggregate_score=0.1,
+        scores={},
+        bundle={"signal_schema_version": "SE-9.9.9"},
+        duration_ms=None,
+        config_hash=None,
+    )
+    assert row is not None
+    assert row[EVENT_COLUMNS.index("reason_code")] is None
+    bundle = json.loads(row[EVENT_COLUMNS.index("signal_bundle_json")])
+    assert bundle["signal_schema_version"] == "unknown"
+    assert policy.signal_bundle(bundle) == bundle
+    detail = policy.trust_detail(
+        {"runtime_mode": "acme_workspace", "trust_logic_version": "TO-9.9"}
+    )
+    assert "runtime_mode" not in detail and "trust_logic_version" not in detail
+    assert policy.trust_detail(detail) == detail

@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import sqlite3
 from pathlib import Path
 
 from lionlock.telemetry.cli import main
@@ -78,3 +79,16 @@ def test_verify_reports_tampering(tmp_path, monkeypatch, capsys) -> None:
     code, verified = _run(capsys, "verify")
     assert code == 1
     assert verified["tables"]["events"]["first_bad_seq"] == 1
+
+
+def test_serve_refuses_a_warehouse_with_an_older_layout(tmp_path, capsys) -> None:
+    data_dir = tmp_path / "server"
+    data_dir.mkdir()
+    with sqlite3.connect(data_dir / "warehouse.db") as conn:
+        conn.execute("CREATE TABLE uploads (file_sha256 TEXT PRIMARY KEY NOT NULL)")
+    config = str(tmp_path / "absent.toml")
+    code, out = _run(
+        capsys, "--config", config, "serve", "--data-dir", str(data_dir), "--port", "0"
+    )
+    assert code == 1
+    assert out["ok"] is False and "new data directory" in out["error"]

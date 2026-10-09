@@ -153,7 +153,7 @@ def _cmd_reset_identity(config: Dict[str, Any], _args: argparse.Namespace) -> in
 
 
 def _cmd_serve(_config: Dict[str, Any], args: argparse.Namespace) -> int:
-    from .receiver import ReceiverConfig, load_token_hashes, make_server
+    from .receiver import ReceiverConfig, WarehouseVersionError, load_token_hashes, make_server
 
     token_hashes = load_token_hashes(args.token_hashes_file) if args.token_hashes_file else None
     receiver_config = ReceiverConfig(
@@ -161,7 +161,11 @@ def _cmd_serve(_config: Dict[str, Any], args: argparse.Namespace) -> int:
         token_hashes=token_hashes or frozenset(),
         max_body_bytes=int(args.max_body_mb) * 1024 * 1024,
     )
-    server = make_server(receiver_config, host=args.host, port=args.port)
+    try:
+        server = make_server(receiver_config, host=args.host, port=args.port)
+    except WarehouseVersionError as exc:
+        _print({"ok": False, "error": str(exc)})
+        return 1
     mode = "token" if token_hashes else "anonymous"
     sys.stderr.write(
         f"lionlock-telemetry receiver on http://{args.host}:{server.server_port} ({mode} uploads)\n"

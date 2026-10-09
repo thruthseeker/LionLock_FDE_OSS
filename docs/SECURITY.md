@@ -46,7 +46,7 @@ Failsafe encryption uses Fernet (AES-128 CBC mode from the `cryptography` librar
 
 ## Telemetry
 - Logging is local by default (`logs/lionlock.db`); uploads are opt-in and disabled by `DO_NOT_TRACK=1`.
-- Uploads contain only the allowlisted fields in [TELEMETRY.md](TELEMETRY.md); the receiver re-applies the same policy and treats every snapshot as untrusted input.
+- Uploads contain only the allowlisted fields in [TELEMETRY.md](TELEMETRY.md), sent and stored as files rebuilt from validated rows; the receiver re-applies the same policy and treats every snapshot as untrusted input.
 
 ## Privacy Trade-offs (OSS)
 - Key-based scrubbing blocks known prompt/response field names.

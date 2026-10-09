@@ -35,18 +35,8 @@ DEFAULT_SIGNAL_WEIGHTS: Dict[str, float] = {
 # supplies nothing would otherwise be gated on an all-defaults score. gating.py drops
 # fatigue_risk_index from the decision channel whenever any fatigue input is missing.
 #
-# Calibration was attempted against real per-token telemetry and abandoned because that data
-# cannot support it. This is a statement about the available data, not a claim that a fatigue
-# signal is unworkable in principle. The evidence: entropy collapse is normal in healthy greedy
-# decoding (relative collapse p95 0.989 on clean responses), loop and runaway failures move the
-# entropy features in opposite directions so one scalar cannot carry both, and no threshold
-# reached usable recall at a 1% false-positive target. A threshold fitted to 1% false positives on
-# one telemetry store produced 25-81% false positives on another store from the same model at the
-# same sampling temperature, and the second store contained no failure cases at all, so recall was
-# not measurable in the other direction. Raising the gain to make the range reach yellow measured
-# 2.23-3.34% false positives at 0.00% true positives. Do not retune these without per-token
-# telemetry that includes multi-turn sessions, genuine per-token timing, a fixed sampling
-# temperature, and task-level outcome labels.
+# They have not been validated against labelled outcomes. Retune them only with data that
+# carries outcome labels, and treat fatigue_risk_index as uncalibrated until then.
 FATIGUE_SIGMOID_GAIN = 4.0
 FATIGUE_SIGMOID_BIAS = 1.5
 FATIGUE_WEIGHTS = {
