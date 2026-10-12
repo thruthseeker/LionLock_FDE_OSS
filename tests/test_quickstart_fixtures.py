@@ -20,6 +20,7 @@ def test_fixture_schema_and_minimum_samples() -> None:
     for sample in samples:
         assert isinstance(sample.get("id"), str) and sample["id"]
         assert isinstance(sample.get("text"), str) and sample["text"]
+        assert isinstance(sample.get("response"), str) and sample["response"]
         assert sample.get("label") in {"FLAGGED", "CLEAN"}
 
 
@@ -39,6 +40,7 @@ def test_quickstart_uses_env_gating_override(monkeypatch) -> None:
         reason_code = None
         decision_risk_score = 0.1
         signal_scores = {}
+        signal_bundle = None
 
     seen: list[bool] = []
 

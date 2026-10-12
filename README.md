@@ -19,8 +19,8 @@ Normalizes session signals. Flags low-confidence or inconsistent prompt structur
 ### ✅ Module 03 – Drift & Fatigue Anomaly Detection
 Detects hallucination markers, entropy spikes, and output degradation over time.
 
-### ✅ Module 04 – SQL Telemetry Logging
-Supports SQL-backed telemetry when explicitly enabled in config.
+### ✅ Module 04 – Telemetry Logging
+Logs decisions and trust records to a local, hash-chained SQLite file by default. Opt-in uploads send only allowlisted, pseudonymized fields to a receiver you run. SQL-backed telemetry remains available when explicitly enabled in config.
 
 ### ✅ Module 05 – Gating Core & Policy Engine
 Computes deterministic gate decisions from trust signals; enforcement vs log-only behavior is controlled by `gating.enabled` / `LIONLOCK_GATING_ENABLED`.
@@ -44,4 +44,17 @@ bash tools/dev_setup.sh
 
 Config templates: [`lionlock.toml.example`](lionlock.toml.example) and [`.env.example`](.env.example).
 
+Five-minute walkthrough: [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
+
 Audit log details: [`docs/AUDIT_LOGGING.md`](docs/AUDIT_LOGGING.md).
+
+---
+
+## 📡 Telemetry
+
+LionLock writes its telemetry to one local SQLite file, `logs/lionlock.db`, and **uploads nothing unless you opt in**. If you enable uploads, only the allowlisted, pseudonymized fields documented in [`docs/TELEMETRY.md`](docs/TELEMETRY.md) are sent, over HTTPS, to a receiver you run. Prompts, responses, raw identifiers, and hostnames are never included, and `DO_NOT_TRACK=1` turns uploads off.
+
+```bash
+lionlock-telemetry status    # where the log is and whether uploads are enabled
+lionlock-telemetry preview   # exactly what an upload would contain, without sending it
+```

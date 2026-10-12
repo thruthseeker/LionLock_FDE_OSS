@@ -8,7 +8,7 @@ from .models import (
     SignalScores,
     canonical_gating_decision,
 )
-from .scoring import SIGNAL_SCHEMA_VERSION, aggregate_score
+from .scoring import SIGNAL_SCHEMA_VERSION, aggregate_score, low_conf_halluc_score
 
 DEFAULT_THRESHOLDS: Dict[str, float] = {
     "yellow": 0.45,
@@ -39,6 +39,14 @@ DERIVED_RISK_KEYS = (
     "fatigue_risk_index",
     "low_conf_halluc",
     "congestion_signature",
+)
+
+# Metadata inputs that fatigue_risk_index is computed from. None of them has a definition in this
+# repo, so any of them being absent means the fatigue score is an all-defaults artifact.
+FATIGUE_INPUT_KEYS = (
+    "entropy_decay",
+    "turn_index",
+    "drift_slope",
 )
 
 TRIGGER_SIGNAL_ORDER = (
@@ -86,6 +94,20 @@ def _reason_code_for(trigger_signal: str) -> str:
     return "policy_violation"
 
 
+def gating_derived_risk_keys(missing_inputs: Iterable[str]) -> tuple[str, ...]:
+    """Derived signals allowed to raise the severity band.
+
+    SE-0.4.0: ``fatigue_risk_index`` is withheld from the decision channel when any of
+    ``FATIGUE_INPUT_KEYS`` is missing. Its sigmoid is uncalibrated (see the note on
+    ``FATIGUE_SIGMOID_GAIN`` in scoring.py), so a caller that supplies no fatigue metadata must not
+    be gated on the resulting all-defaults score. The value is still reported in the bundle for
+    observability; it just cannot move a band.
+    """
+    if set(missing_inputs) & set(FATIGUE_INPUT_KEYS):
+        return tuple(key for key in DERIVED_RISK_KEYS if key != "fatigue_risk_index")
+    return DERIVED_RISK_KEYS
+
+
 def _pick_by_order(values: Dict[str, float], order: Iterable[str]) -> str:
     if not values:
         return "unknown"
@@ -99,12 +121,6 @@ def _pick_by_order(values: Dict[str, float], order: Iterable[str]) -> str:
         if values.get(key, -1.0) == best_value:
             return key
     return "unknown"
-
-
-def _low_conf_halluc(scores: SignalScores) -> float:
-    entropy_high = _clamp(1.0 - scores.novelty_entropy_proxy)
-    hallucination_low = _clamp(1.0 - scores.hallucination_risk)
-    return _clamp(entropy_high * hallucination_low)
 
 
 def _evaluate_policy_with_scores(
@@ -122,7 +138,8 @@ def _evaluate_policy_with_scores(
     safe_signal_scores = _safe_signal_map(signal_scores.as_dict())
     safe_derived = _safe_signal_map(derived_signals.as_dict())
     raw_channel = _safe_unit_interval(aggregate)
-    derived_risk_map = {key: safe_derived.get(key, 0.0) for key in DERIVED_RISK_KEYS}
+    gating_keys = gating_derived_risk_keys(signal_bundle.missing_inputs)
+    derived_risk_map = {key: safe_derived.get(key, 0.0) for key in gating_keys}
     derived_channel = max(derived_risk_map.values()) if derived_risk_map else 0.0
     decision_risk_score = _clamp(max(raw_channel, derived_channel))
 
@@ -200,14 +217,20 @@ def decide_gate(
         fatigue_risk_index=0.0,
         fatigue_risk_25t=0.0,
         fatigue_risk_50t=0.0,
-        low_conf_halluc=_low_conf_halluc(scores),
+        low_conf_halluc=low_conf_halluc_score(scores),
         congestion_signature=0.0,
     )
     bundle = SignalBundle(
         signal_schema_version=SIGNAL_SCHEMA_VERSION,
         signal_scores=scores,
         derived_signals=derived_signals,
-        missing_inputs=(),
+        # SE-0.4.0: this entry point accepts raw signal scores only and never receives fatigue
+        # metadata, so the fatigue_risk_index=0.0 above is an all-defaults placeholder rather than a
+        # measurement. Declaring those inputs missing keeps the placeholder out of the decision
+        # channel and out of trigger attribution. Without this, fatigue_risk_index stayed in the
+        # derived map and, being first in TRIGGER_SIGNAL_ORDER, won ties: an all-zero call reported
+        # reason_code "fatigue_risk".
+        missing_inputs=FATIGUE_INPUT_KEYS,
     )
     return _evaluate_policy_with_scores(
         aggregate=aggregate_score,

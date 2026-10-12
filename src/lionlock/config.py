@@ -79,8 +79,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "logging": {
         "enabled": True,
-        "backend": "jsonl",
+        "backend": "sqlite",
         "path": "logs/lionlock_events.jsonl",
+        "sqlite_path": "logs/lionlock.db",
+        "sqlite_max_rows": 100000,
         "verbosity": "normal",
         "retention_events": 2000,
         "content_policy": "signals_only",
@@ -107,6 +109,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "token_db_uri": "",
             "refresh_interval_s": 60,
         },
+    },
+    "telemetry_upload": {
+        "enabled": False,
+        "endpoint": "",
+        "token_env": "LIONLOCK_UPLOAD_TOKEN",
+        "token_path": "",
+        "ca_file": "",
+        "outbox_dir": "",
+        "interval_hours": 24,
+        "rows_per_snapshot": 20000,
+        "timeout_s": 30,
     },
     "failsafe": {
         "enabled": False,
@@ -223,7 +236,7 @@ def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
         sql_cfg["uri"] = telemetry_db_uri
         sql_cfg["token"] = telemetry_db_uri
         sql_cfg["enabled"] = True
-    backend = str(logging_cfg.get("backend") or "jsonl").lower()
+    backend = str(logging_cfg.get("backend") or "sqlite").lower()
     if sql_cfg.get("enabled") and backend not in {"sql", "both"}:
         raise RuntimeError("SQL telemetry requires logging.backend to be 'sql' or 'both'.")
     if sql_cfg.get("enabled") and not str(sql_cfg.get("token", "")).strip():

@@ -4,7 +4,7 @@ This quickstart runs a local fixture set through the OSS flow:
 
 1. Signal scoring (Module 02)
 2. Gating decision (Module 05)
-3. Public telemetry JSONL logging
+3. Public telemetry logging to the local SQLite file `logs/lionlock.db`
 4. Trust Overlay record generation
 
 ## Run
@@ -17,7 +17,18 @@ Expected output format:
 
 ```text
 Quickstart summary: FLAGGED=<n> CLEAN=<n>
+Telemetry log: logs/lionlock.db
 ```
+
+## Look at the log
+
+```bash
+lionlock-telemetry status    # row counts and upload state (uploads are off by default)
+lionlock-telemetry verify    # check the log's hash chains
+lionlock-telemetry preview   # what an upload would contain, if you ever opt in
+```
+
+See [TELEMETRY.md](TELEMETRY.md) for the log format and the opt-in upload pipeline.
 
 ## Fixture dataset
 
@@ -28,6 +39,9 @@ Fixture data lives at:
 Each record contains:
 
 - `id`
-- `text`
+- `text`: the prompt
+- `response`: a sample model response that exhibits the labeled behavior
 - `label` (`FLAGGED` or `CLEAN`)
 - optional `notes`
+
+With the bundled fixtures the summary is `FLAGGED=3 CLEAN=2`, matching the labels.

@@ -11,6 +11,7 @@ from lionlock.config import load_config, resolve_gating_enabled
 from lionlock.core.gating import evaluate_policy
 from lionlock.core.scoring import score_payload
 from lionlock.logging.event_log import build_signal_event, config_hash_from, log_event
+from lionlock.telemetry.store import resolve_sqlite_path
 from lionlock.trust_overlay.logger import append_trust_record, build_trust_record
 
 FIXTURE_PATH = Path("tests/fixtures/sample_sessions.json")
@@ -28,7 +29,6 @@ def load_fixture_sessions(path: str | Path = FIXTURE_PATH) -> list[dict[str, Any
 def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
     """Run end-to-end demo and print FLAGGED vs CLEAN summary."""
     config = load_config()
-    config["logging"]["backend"] = "jsonl"
     config["logging_sql"]["enabled"] = False
     gating_enabled = resolve_gating_enabled(config)
     records = load_fixture_sessions(path)
@@ -39,7 +39,8 @@ def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
 
     for idx, record in enumerate(records):
         prompt = str(record.get("text", ""))
-        payload = {"prompt": prompt, "response": prompt, "metadata": {"turn_index": idx}}
+        response = str(record.get("response") or prompt)
+        payload = {"prompt": prompt, "response": response, "metadata": {"turn_index": idx}}
         bundle = score_payload(payload)
         if bundle is None:
             continue
@@ -63,6 +64,7 @@ def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
             signal_scores=decision.signal_scores,
             duration_ms=0,
             config_hash=config_hash,
+            signal_bundle=decision.signal_bundle,
         )
         log_event(event, config)
 
@@ -70,10 +72,10 @@ def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
             session_id=str(record.get("id", idx)),
             turn_index=idx,
             model_id="quickstart-demo",
-            prompt_type="fixture",
+            prompt_type="other",
             derived_signals=bundle.derived_signals,
             aggregate_score=decision.decision_risk_score,
-            response_text=prompt,
+            response_text=response,
             response_hash=None,
             score_history=[decision.decision_risk_score],
             timestamps=[timestamp],
@@ -86,6 +88,7 @@ def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
     summary = {"FLAGGED": flagged, "CLEAN": clean}
     print(f"Quickstart mode: {mode}")
     print(f"Quickstart summary: FLAGGED={flagged} CLEAN={clean}")
+    print(f"Telemetry log: {resolve_sqlite_path(config)}")
     return summary
 
 
