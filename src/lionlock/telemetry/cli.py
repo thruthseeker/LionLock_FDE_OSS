@@ -19,7 +19,12 @@ from lionlock.config import load_config
 from .export import export_all, export_snapshot, pending_snapshots
 from .snapshot import COLUMNS, SnapshotError, SnapshotInfo, validate_snapshot
 from .store import LogStore, StoreError, open_store, resolve_sqlite_path
-from .upload import UploadDisabledError, export_and_upload, resolve_upload_settings
+from .upload import (
+    DELIVERED_STATUSES,
+    UploadDisabledError,
+    export_and_upload,
+    resolve_upload_settings,
+)
 
 
 def _print(payload: Any) -> None:
@@ -89,8 +94,14 @@ def _cmd_export(config: Dict[str, Any], args: argparse.Namespace) -> int:
     settings = resolve_upload_settings(config)
     out_dir = Path(args.out).expanduser() if args.out else settings.outbox_dir
     results = export_all(store, out_dir, rows_per_snapshot=settings.rows_per_snapshot)
-    _print({"outbox_dir": str(out_dir), "exported": [result.as_dict() for result in results]})
-    return 0
+    _print(
+        {
+            "outbox_dir": str(out_dir),
+            "exported": [result.as_dict() for result in results],
+            "more_pending": results.more_pending,
+        }
+    )
+    return 1 if results.more_pending else 0
 
 
 def _describe(info: SnapshotInfo, rows: int) -> Dict[str, Any]:
@@ -143,7 +154,9 @@ def _cmd_upload(config: Dict[str, Any], _args: argparse.Namespace) -> int:
         _print({"uploaded": False, "reason": str(exc)})
         return 2
     _print(summary)
-    return 0 if summary["pending"] == 0 else 1
+    delivered = all(upload["status"] in DELIVERED_STATUSES for upload in summary["uploads"])
+    finished = summary["pending"] == 0 and not summary["more_pending"]
+    return 0 if delivered and finished else 1
 
 
 def _cmd_reset_identity(config: Dict[str, Any], _args: argparse.Namespace) -> int:
@@ -155,7 +168,11 @@ def _cmd_reset_identity(config: Dict[str, Any], _args: argparse.Namespace) -> in
 def _cmd_serve(_config: Dict[str, Any], args: argparse.Namespace) -> int:
     from .receiver import ReceiverConfig, WarehouseVersionError, load_token_hashes, make_server
 
-    token_hashes = load_token_hashes(args.token_hashes_file) if args.token_hashes_file else None
+    try:
+        token_hashes = load_token_hashes(args.token_hashes_file) if args.token_hashes_file else None
+    except (OSError, ValueError) as exc:
+        _print({"ok": False, "error": f"token hash file: {exc}"})
+        return 1
     receiver_config = ReceiverConfig(
         data_dir=Path(args.data_dir).expanduser(),
         token_hashes=token_hashes or frozenset(),

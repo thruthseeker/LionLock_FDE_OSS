@@ -39,6 +39,7 @@ CONTENT_TYPE = "application/vnd.lionlock.snapshot+sqlite"
 DEFAULT_TOKEN_ENV = "LIONLOCK_UPLOAD_TOKEN"
 MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+DELIVERED_STATUSES = frozenset({"uploaded", "duplicate"})
 
 _TRUE = {"1", "true", "t", "yes", "y", "on"}
 _FALSE = {"0", "false", "f", "no", "n", "off"}
@@ -85,7 +86,7 @@ class UploadOutcome:
 
     @property
     def delivered(self) -> bool:
-        return self.status in {"uploaded", "duplicate"}
+        return self.status in DELIVERED_STATUSES
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -125,6 +126,7 @@ def endpoint_problem(endpoint: str) -> str | None:
         parts = urlsplit(endpoint)
         host = (parts.hostname or "").lower()
         has_credentials = parts.username is not None or parts.password is not None
+        _ = parts.port  # raises ValueError for a non-numeric or out-of-range port
     except ValueError:
         return "telemetry endpoint is not a valid URL"
     if has_credentials:
@@ -221,9 +223,14 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def _send(request: urllib.request.Request, settings: UploadSettings) -> Any:
     context = ssl.create_default_context(cafile=settings.ca_file)
-    opener = urllib.request.build_opener(
-        _NoRedirect(), urllib.request.HTTPSHandler(context=context)
-    )
+    handlers: List[urllib.request.BaseHandler] = [
+        _NoRedirect(),
+        urllib.request.HTTPSHandler(context=context),
+    ]
+    if (urlsplit(request.full_url).hostname or "").lower() in LOOPBACK_HOSTS:
+        # Plain http is allowed only for loopback; never relay it (or its token) via a proxy.
+        handlers.append(urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(*handlers)
     return opener.open(request, timeout=settings.timeout_s)
 
 
@@ -250,8 +257,10 @@ def _classify(name: str, status: int, retry_after: float | None = None) -> Uploa
 def upload_snapshot(path: Path, settings: UploadSettings) -> UploadOutcome:
     """Send one sealed snapshot. Raises ``UploadDisabledError`` if uploads are not allowed.
 
-    The request body is the gzip of a file rebuilt from the snapshot's validated rows, and the
-    transport hashes describe exactly those bytes. ``path`` is read once and never modified.
+    The request body is the gzip of a file rebuilt from the snapshot's validated rows.
+    ``X-LionLock-File-SHA256`` and ``Idempotency-Key`` are the SHA-256 of that rebuilt,
+    uncompressed file (the receiver recomputes it after decompressing), never of the gzip bytes.
+    ``path`` is read once and never modified.
     """
     if not settings.allowed:
         raise UploadDisabledError(settings.blocked_reason or "uploads are disabled")
@@ -348,6 +357,7 @@ def export_and_upload(
         "exported": [result.as_dict() for result in exported],
         "uploads": [outcome.as_dict() for outcome in outcomes],
         "pending": len(pending_snapshots(settings.outbox_dir)),
+        "more_pending": exported.more_pending,
     }
 
 

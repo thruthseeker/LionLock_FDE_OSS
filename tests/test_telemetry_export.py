@@ -332,11 +332,12 @@ def test_public_label_sets_match_the_values_the_code_emits() -> None:
     ("value", "expected"),
     [
         ("0.1.0", "0.1.0"),
-        ("1.2.3rc1", "1.2.3rc1"),
-        ("2.0.0.dev3", "2.0.0.dev3"),
-        ("1.0.0.post1", "1.0.0.post1"),
-        ("0.0.0-dev", "0.0.0-dev"),
         ("unknown", "unknown"),
+        ("31.41.5926", "unknown"),
+        ("1.2.3rc1", "unknown"),
+        ("2.0.0.dev3", "unknown"),
+        ("1.0.0.post1", "unknown"),
+        ("0.0.0-dev", "unknown"),
         ("0.1.0+acme.internal", "unknown"),
         ("acme-1.0", "unknown"),
         ("SyntheticPrivate-Orion", "unknown"),
@@ -345,7 +346,7 @@ def test_public_label_sets_match_the_values_the_code_emits() -> None:
         (None, "unknown"),
     ],
 )
-def test_package_versions_are_numeric_release_labels(value, expected) -> None:
+def test_package_versions_are_published_releases_only(value, expected) -> None:
     assert policy.package_version_label(value) == expected
     assert policy.package_version_label(expected) == expected
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -28,6 +29,8 @@ from typing import Any, Dict, Iterator, List, Mapping, Sequence, Tuple
 
 from . import policy
 from .canonical import canonical_json
+
+_LOGGER = logging.getLogger(__name__)
 
 SNAPSHOT_FORMAT = "lionlock-telemetry-snapshot"
 # v2: label fields hold only public values, and transfers carry rebuilt files (docs/TELEMETRY.md).
@@ -394,12 +397,19 @@ def read_capped(path: Path, max_bytes: int = DEFAULT_MAX_SNAPSHOT_BYTES) -> byte
 
 @contextmanager
 def _private_dir(parent: Path | None) -> Iterator[Path]:
-    """A fresh owner-only directory, removed with everything in it when the block exits."""
+    """A fresh owner-only directory, removed with everything in it when the block exits.
+
+    A failed removal is logged and raised, never ignored: the directory may hold raw input.
+    """
     directory = Path(tempfile.mkdtemp(prefix="lionlock-", dir=parent))
     try:
         yield directory
     finally:
-        shutil.rmtree(directory)
+        try:
+            shutil.rmtree(directory)
+        except OSError:
+            _LOGGER.error("could not remove private work directory %s", directory)
+            raise
 
 
 def validate_snapshot_bytes(

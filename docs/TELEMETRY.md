@@ -53,8 +53,15 @@ Each table is an append-only hash chain: every row stores the SHA-256 of its con
 with the previous row's hash. `lionlock-telemetry verify` recomputes the chain and reports the
 first row that was edited, reordered, or deleted. Pruning records the hash of the last removed
 row, so the retained window stays verifiable. Like any self-contained hash chain, this cannot
-detect rows removed from the end of the file. The file is created with owner-only permissions,
-and deleted rows are overwritten (`secure_delete`).
+detect rows removed from the end of the file. The file is kept owner-only: its mode is set when
+it is first opened in a process and re-checked on later writes, and a failure to set it is
+reported as an error. Deleted rows are overwritten (`secure_delete`). LionLock writes only to its
+own log: a database without LionLock's application id is used only if it is completely empty
+(no schema and no version stamp), so a file that merely has tables with the same names is
+refused unchanged. The file's identity is checked again on every read and write, before its mode
+or contents change, so a different database later placed at the same path is refused too. Only
+SQLite's own internal objects (names starting with the literal prefix `sqlite_`) are disregarded
+when deciding whether a file is empty.
 
 The local log holds more than an upload does, for example raw request and session IDs. Share a
 snapshot, never the log file itself.
@@ -114,6 +121,11 @@ SQLite file, so you can also open it with `sqlite3`.
 them somewhere other than the outbox, for example to carry them out of an air-gapped network.
 Placed in another machine's outbox, they are uploaded by `lionlock-telemetry upload` there.
 
+One run seals at most 1,000 segments. If logged rows remain after that, `export` prints
+`"more_pending": true` and exits 1; run it again to continue. `upload` exits 0 only when every
+snapshot it handled was delivered (`uploaded` or `duplicate`) and nothing is left to send, 1
+otherwise (including rejected or invalid snapshots), and 2 when uploads are disabled.
+
 ## Data dictionary: everything an upload can contain
 
 ### `snapshot_meta` (one set per snapshot)
@@ -124,7 +136,7 @@ Placed in another machine's outbox, they are uploaded by `lionlock-telemetry upl
 | `install_id` | Random 128-bit ID, created on first export; rotate with `reset-identity` |
 | `segment_index`, `prev_segment_digest` | Segment counter and the digest of the previous segment |
 | `content_digest` | SHA-256 over the canonical content of this snapshot |
-| `lionlock_version` | Numeric release version such as `0.1.0` (`0.0.0-dev` for an uninstalled checkout); anything else becomes `unknown` |
+| `lionlock_version` | A published LionLock release (currently only `0.1.0`); anything else, including private or development build numbers, becomes `unknown` |
 | `python` | Major.minor only, for example `3.11` |
 | `platform` | `linux`, `macos`, `windows`, `freebsd`, or `other` |
 | `<table>_rows`, `<table>_pruned_before_export` | Row counts and rows lost to local pruning |
@@ -164,8 +176,12 @@ Label fields carry only the public values listed above, the values LionLock itse
 private name can look exactly like an identifier or a version string, so these fields are checked
 for membership, never for shape: anything else is dropped or neutralized as shown. `unknown`
 records only that a value was not a recognized public one; replay tooling must not guess the real
-version from it. Snapshot `schema_version` 2 introduced these rules and rebuilt transfers, and a
-receiver accepts version 2 only.
+version from it. The published-release list grows only through a reviewed code change, never
+from logs, the environment, or a received value. Snapshot `schema_version` 2 introduced these
+rules and rebuilt transfers. A receiver accepts version 2 only: version 1 snapshots and
+warehouses are unsupported and are refused without being changed. Whether any version 1 data
+exists outside this repository is unknown; migrating or cleaning it up is not part of this
+release.
 
 ### Never uploaded
 
@@ -174,9 +190,21 @@ pseudonymous user key. Hostnames and hostname hashes, container IDs, base URLs, 
 Model names (only the family), stop sequences, seeds, free-text notes, and auth tokens. Exact
 timestamps (only the hour).
 
-HTTP requests carry `User-Agent: lionlock/<version>` and headers that repeat the snapshot's
-install ID, segment, and digests; `X-LionLock-File-SHA256` and `Idempotency-Key` are the SHA-256
-of the rebuilt file actually sent. The receiver sees the client's IP address at the network level.
+HTTP requests carry `User-Agent: lionlock/<version>` (the same published-release label, else
+`unknown`) and headers that repeat the snapshot's install ID, segment, and digests. The byte
+domains are fixed:
+
+| Value | SHA-256 of |
+|---|---|
+| `X-LionLock-File-SHA256`, `Idempotency-Key` | The rebuilt, uncompressed SQLite file; the request body is gzip of exactly these bytes |
+| `received_sha256` (receiver) | The request body after bounded decompression |
+| `stored_sha256` (receiver) | The clean file kept in `accepted/` |
+| `content_digest` | The canonical metadata and rows, independent of file layout |
+
+No digest of the compressed body is used under any of these names. Plain-http loopback endpoints
+are contacted directly, ignoring proxy environment variables, so a token and snapshot never pass
+through a proxy unencrypted; HTTPS endpoints honor the usual proxy settings. The receiver sees
+the client's IP address at the network level.
 The reference receiver never logs or stores it, and your reverse proxy should be configured the
 same way (see below).
 
@@ -213,7 +241,8 @@ lionlock-telemetry serve --data-dir /var/lib/lionlock-telemetry --token-hashes-f
 
 Clients set `token_path` (or `LIONLOCK_UPLOAD_TOKEN`). The receiver stores only hashes, so a
 leaked allowlist does not reveal any token. Without a token file, the receiver accepts anonymous
-uploads, rate-limited per install.
+uploads, rate-limited per install. A token file that lists no hashes (empty, or comments only) is
+refused at startup instead of being treated as anonymous mode.
 
 ### What the receiver checks
 
@@ -233,18 +262,30 @@ In order, before any row reaches the warehouse:
    metadata, rows, and content digest, with no free pages or bytes past its last page.
 
 An accepted upload is stored only as that rebuild, `accepted/<sha256>.db` named by the rebuild's
-own SHA-256, and merged into `warehouse.db` in one transaction. The uploaded bytes are deleted on
-every path; a rejection leaves only `rejected/<sha256>.reason.txt`, named by the SHA-256 of the
-received file. Keeping raw uploads would need its own sensitive-data retention policy, and the
-reference receiver has none. Duplicates are decided by content: sending a segment again returns
-`200 duplicate`, even in a bytewise-different file, while different content for a segment that
-was already received returns `409`. Each upload row records the SHA-256 of the received file
-(`received_sha256`) and of the stored rebuild (`stored_sha256`) separately, and whether its
-`prev_segment_digest` links to the previous segment (`ok`, `gap`, or `broken`).
+own SHA-256. The file is written and fsynced before the upload is committed to `warehouse.db`,
+so a recorded upload always has its file. Clean accepted files are never deleted by the
+receiver; a failure after the file is written but before the commit can leave an unreferenced
+("orphan") file, which is not counted as an upload. The uploaded bytes are deleted on every path,
+and a failure to delete them is logged and fails the request; a rejection leaves only
+`rejected/<sha256>.reason.txt`, named by the SHA-256 of the received file. Keeping raw uploads
+would need its own sensitive-data retention policy, and the reference receiver has none.
 
-`warehouse.db` is stamped with its layout version (`PRAGMA user_version`, currently 2). The
-receiver refuses a warehouse created by an older layout rather than reinterpreting its columns;
-start it with a new data directory.
+Duplicates are decided by content: sending a segment again returns `200 duplicate`, even in a
+bytewise-different file, but only after the recorded accepted file is checked against its
+`stored_sha256`. If that file is missing or corrupt the receiver answers `500 stored evidence
+missing or corrupt` and leaves the record as it is. Different content for a segment that was
+already received returns `409`, and so does a segment whose rows reuse sequence numbers already
+stored for the install; neither changes the warehouse. Each upload row records `received_sha256`
+and `stored_sha256` separately, and whether its `prev_segment_digest` links to the previous
+segment (`ok`, `gap`, or `broken`). A segment recorded as a `gap` is re-judged when its
+predecessor arrives.
+
+`warehouse.db` is stamped with its layout version (`PRAGMA user_version`, currently 2). Before
+the receiver creates or writes anything, an existing warehouse is opened read-only and must be
+either empty (no schema of its own, `user_version` 0, `application_id` 0; empty tables do not
+count, and only SQLite's internal `sqlite_` objects are disregarded) or an exact match for the current layout, including its tables, columns, keys, and
+indexes. Anything else, including an older layout, is refused without changing its file,
+version fields, or records; start the receiver with a new data directory.
 
 For production, run the receiver as an unprivileged user in a container with a read-only root
 filesystem, a writable data volume, and memory limits.
@@ -324,7 +365,7 @@ key, so future uploads cannot be linked to past ones.
 | A private name passed off as a label or version | Label fields accept only the listed public values, in the client and the receiver alike |
 | A deliberately modified client encodes data in numeric fields | Not prevented: numbers are range-checked, not interpreted. Treat uploads from clients you do not control as untrusted |
 | A crafted SQLite file attacks the parser | Size caps, read-only defensive open, `quick_check`, schema check before any data is read; isolate the process |
-| A bearer token leaks in transit | HTTPS only, no redirects, token read from env or file and never logged; the server stores only hashes |
+| A bearer token leaks in transit | HTTPS only (plain http only for loopback, never via a proxy), no redirects, token read from env or file and never logged; the server stores only hashes |
 | Re-identification through identifiers | Keyed HMAC pseudonyms that cannot be linked across installs; hour-level timestamps; coarse platform data; identity reset |
 | Poisoned or fake uploads | Optional tokens, per-install rate limits, segment chain status; treat community data as statistical |
 | Local log tampering | Per-table hash chains and `lionlock-telemetry verify` |

@@ -5,14 +5,16 @@ Run it on infrastructure you control, behind a TLS-terminating reverse proxy::
     lionlock-telemetry serve --data-dir /var/lib/lionlock-telemetry --port 8787
 
 Every upload is treated as hostile input. The body is size-capped before and after gzip
-decompression and checked against its declared SHA-256. Its raw bytes then exist only in an
+decompression, and the SHA-256 of the decompressed bytes (``received_sha256``) must equal the
+declared ``X-LionLock-File-SHA256``. Its raw bytes then exist only in an
 owner-only file under ``quarantine/`` while they are validated: opened read-only with SQLite's
 hardening options, the file must match the snapshot schema exactly, pass ``PRAGMA quick_check``,
 reproduce its content digest, and come through a re-run of the export policy unchanged. The
-validated rows are then rebuilt into a fresh file, and only that rebuild is stored. Uploaded
-bytes are deleted whether the upload is accepted or rejected; a rejection keeps only its reason.
-Uploads are idempotent per (install, segment), and client IP addresses are never logged or
-stored.
+validated rows are then rebuilt into a fresh file, and only that rebuild is stored, durably and
+before the upload is recorded, as ``accepted/<stored_sha256>.db``. Uploaded bytes are deleted
+whether the upload is accepted or rejected; a rejection keeps only its reason. Uploads are
+idempotent per (install, segment) by ``content_digest``, a duplicate is confirmed only while its
+accepted file is intact, and client IP addresses are never logged or stored.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import logging
 import os
 import re
 import sqlite3
+import sys
 import threading
 import time
 import uuid
@@ -45,6 +48,7 @@ from .snapshot import (
     rebuild_clean,
     validate_snapshot_bytes,
 )
+from .store import USER_SCHEMA_OBJECTS
 from .upload import CONTENT_TYPE, UPLOAD_PATH
 
 _LOGGER = logging.getLogger(__name__)
@@ -130,7 +134,11 @@ class IngestResult:
 
 
 def load_token_hashes(path: str | Path) -> frozenset[str]:
-    """Read one SHA-256 token hash per line (``#`` comments allowed); raw tokens are refused."""
+    """Read one SHA-256 token hash per line (``#`` comments allowed); raw tokens are refused.
+
+    A file that lists no hashes is refused too: an empty allowlist must not silently turn into
+    anonymous mode. Anonymous mode means passing no token file at all.
+    """
     hashes = set()
     for line in Path(path).read_text(encoding="utf-8").splitlines():
         stripped = line.strip().lower()
@@ -139,6 +147,11 @@ def load_token_hashes(path: str | Path) -> frozenset[str]:
         if not _HEX64.fullmatch(stripped):
             raise ValueError("token hash file must contain only 64-hex SHA-256 hashes")
         hashes.add(stripped)
+    if not hashes:
+        raise ValueError(
+            "token hash file lists no token hashes; add at least one, or omit the file to accept "
+            "anonymous uploads"
+        )
     return frozenset(hashes)
 
 
@@ -166,29 +179,127 @@ class WarehouseVersionError(RuntimeError):
     """Raised when ``warehouse.db`` was created with a different layout than this receiver's."""
 
 
-def init_warehouse(path: Path) -> None:
-    """Create the warehouse, or confirm an existing one already uses this layout.
+def _schema_signature(conn: sqlite3.Connection) -> Tuple[Any, ...]:
+    """Schema objects with their SQL, plus each table's columns and each index's key columns."""
+    entries = sorted(
+        conn.execute(
+            f"SELECT type, name, tbl_name, sql FROM sqlite_master WHERE {USER_SCHEMA_OBJECTS}"
+        ).fetchall()
+    )
+    tables = [name for kind, name, *_ in entries if kind == "table"]
+    columns = {table: conn.execute(f'PRAGMA table_xinfo("{table}")').fetchall() for table in tables}
+    indexes = {
+        table: sorted(
+            (tuple(index[1:]), tuple(conn.execute(f'PRAGMA index_xinfo("{index[1]}")').fetchall()))
+            for index in conn.execute(f'PRAGMA index_list("{table}")').fetchall()
+        )
+        for table in tables
+    }
+    return tuple(entries), columns, indexes
 
-    Older layouts are refused rather than migrated, so a stored value never changes meaning.
+
+_EXPECTED_SIGNATURE: Tuple[Any, ...] | None = None
+
+
+def _expected_signature() -> Tuple[Any, ...]:
+    global _EXPECTED_SIGNATURE
+    if _EXPECTED_SIGNATURE is None:
+        reference = sqlite3.connect(":memory:")
+        try:
+            for ddl in WAREHOUSE_DDL:
+                reference.execute(ddl)
+            _EXPECTED_SIGNATURE = _schema_signature(reference)
+        finally:
+            reference.close()
+    return _EXPECTED_SIGNATURE
+
+
+def _warehouse_state(conn: sqlite3.Connection) -> str:
+    """``empty``, ``current`` or a short reason the warehouse cannot be used.
+
+    Empty means no schema objects of its own, ``user_version`` 0 and ``application_id`` 0;
+    tables with zero rows are not empty. Current means ``user_version`` 2 and a schema that
+    matches ``WAREHOUSE_DDL`` exactly, including columns, keys and indexes.
     """
+    version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    app_id = int(conn.execute("PRAGMA application_id").fetchone()[0])
+    objects = conn.execute(
+        f"SELECT COUNT(*) FROM sqlite_master WHERE {USER_SCHEMA_OBJECTS}"
+    ).fetchone()[0]
+    if version == 0 and app_id == 0 and objects == 0:
+        return "empty"
+    if app_id != 0:
+        return f"it has application_id {app_id}"
+    if version != WAREHOUSE_SCHEMA_VERSION:
+        return f"it uses warehouse layout v{version or 1}"
+    if _schema_signature(conn) != _expected_signature():
+        return f"its v{version} schema does not match this receiver's"
+    return "current"
+
+
+def _refuse(path: Path, reason: str) -> WarehouseVersionError:
+    return WarehouseVersionError(
+        f"{path.name} cannot be used: {reason}. It was left unchanged; this receiver writes "
+        f"warehouse layout v{WAREHOUSE_SCHEMA_VERSION} only, so start it with a new data "
+        "directory"
+    )
+
+
+def init_warehouse(path: Path) -> None:
+    """Create the warehouse, or confirm an existing one already uses this exact layout.
+
+    An existing file is inspected read-only before anything is created or written. Anything
+    other than an empty database or the current layout is refused unchanged: no migration,
+    reset or overwrite.
+    """
+    if path.exists() and path.stat().st_size > 0:
+        try:
+            conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                state = _warehouse_state(conn)
+            finally:
+                conn.close()
+        except sqlite3.DatabaseError as exc:
+            raise _refuse(path, "it is not a readable SQLite database") from exc
+        if state == "current":
+            return
+        if state != "empty":
+            raise _refuse(path, state)
+
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), isolation_level=None)
     try:
         conn.execute("BEGIN IMMEDIATE")
-        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        tables = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'")
-        if version != WAREHOUSE_SCHEMA_VERSION and (version != 0 or tables.fetchone()[0]):
+        state = _warehouse_state(conn)  # re-checked under the write lock
+        if state != "empty":
             conn.execute("ROLLBACK")
-            raise WarehouseVersionError(
-                f"{path.name} uses warehouse layout v{version or 1}, but this receiver writes "
-                f"v{WAREHOUSE_SCHEMA_VERSION}; start it with a new data directory"
-            )
+            if state == "current":
+                return
+            raise _refuse(path, state)
         for ddl in WAREHOUSE_DDL:
             conn.execute(ddl)
         conn.execute(f"PRAGMA user_version={WAREHOUSE_SCHEMA_VERSION}")
         conn.execute("COMMIT")
     finally:
         conn.close()
+
+
+_CONFLICTS = {
+    "conflict": "segment was already received with different content",
+    "sequence_conflict": "segment rows reuse sequence numbers already stored for this install",
+}
+_O_BINARY = getattr(os, "O_BINARY", 0)
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Persist a rename inside ``directory`` (POSIX; elsewhere the rename itself suffices)."""
+    if os.name != "posix":
+        return
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _error(status: int, message: str, headers: Dict[str, str] | None = None) -> IngestResult:
@@ -208,9 +319,9 @@ class Receiver:
         self.accepted_dir = config.data_dir / "accepted"
         self.rejected_dir = config.data_dir / "rejected"
         self.warehouse_path = config.data_dir / "warehouse.db"
+        init_warehouse(self.warehouse_path)
         for directory in (self.quarantine_dir, self.accepted_dir, self.rejected_dir):
             directory.mkdir(parents=True, exist_ok=True)
-        init_warehouse(self.warehouse_path)
         self._ingest_lock = threading.Lock()
         self._rate_lock = threading.Lock()
         self._rate: Dict[str, Tuple[int, int]] = {}
@@ -258,7 +369,10 @@ class Receiver:
         install_id = lowered.get("x-lionlock-install-id", "").strip().lower()
         if not _HEX32.fullmatch(install_id):
             return _error(400, "missing or malformed X-LionLock-Install-Id")
-        if self._already_received(received_sha):
+        recorded = self._stored_sha_for(received_sha)
+        if recorded is not None:
+            if not self._evidence_intact(recorded):
+                return self._evidence_failure()
             return IngestResult(200, {"status": "duplicate", "file_sha256": received_sha})
         if not self._within_rate(install_id):
             return _error(429, "upload rate limit exceeded", {"Retry-After": "3600"})
@@ -272,11 +386,13 @@ class Receiver:
             return _error(422, str(exc))
 
         stored_sha = hashlib.sha256(clean).hexdigest()
-        outcome = self._ingest(received_sha, stored_sha, info)
-        if outcome == "conflict":
-            message = "segment was already received with different content"
+        outcome, recorded = self._ingest(received_sha, stored_sha, clean, info)
+        if outcome in _CONFLICTS:
+            message = _CONFLICTS[outcome]
             self._reject(received_sha, message)
             return _error(409, message)
+        if outcome == "duplicate" and not self._evidence_intact(recorded):
+            return self._evidence_failure()
         body_out: Dict[str, Any] = {
             "status": outcome,
             "file_sha256": received_sha,
@@ -284,7 +400,6 @@ class Receiver:
             "segment_index": info.segment_index,
         }
         if outcome == "created":
-            self._store(stored_sha, clean)
             body_out["stored_sha256"] = stored_sha
         return IngestResult(201 if outcome == "created" else 200, body_out)
 
@@ -312,42 +427,86 @@ class Receiver:
             self._rate[install_id] = (hour, count + 1)
         return True
 
-    def _already_received(self, received_sha: str) -> bool:
+    def _stored_sha_for(self, received_sha: str) -> str | None:
+        """The stored_sha256 of a committed upload that arrived as exactly these bytes."""
         conn = sqlite3.connect(str(self.warehouse_path), timeout=30)
         try:
             row = conn.execute(
-                "SELECT 1 FROM uploads WHERE received_sha256 = ? LIMIT 1", (received_sha,)
+                "SELECT stored_sha256 FROM uploads WHERE received_sha256 = ? LIMIT 1",
+                (received_sha,),
             ).fetchone()
         finally:
             conn.close()
-        return row is not None
+        return None if row is None else str(row[0])
+
+    def _evidence_intact(self, stored_sha: str | None) -> bool:
+        """Whether the accepted file a committed upload points to exists with its recorded hash."""
+        if not stored_sha:
+            return False
+        path = self.accepted_dir / f"{stored_sha}.db"
+        try:
+            return hashlib.sha256(path.read_bytes()).hexdigest() == stored_sha
+        except OSError:
+            return False
+
+    @staticmethod
+    def _evidence_failure() -> IngestResult:
+        # The warehouse record is left as it is: it is the evidence that something went wrong.
+        _LOGGER.error("a recorded upload's accepted file is missing or corrupt")
+        return _error(500, "stored evidence missing or corrupt")
 
     def _store(self, stored_sha: str, clean: bytes) -> None:
+        """Write accepted/<stored_sha>.db durably. Called before the upload is committed, so a
+        recorded upload always has its file. Accepted files are never deleted here: a failure
+        later in the same request can leave an unreferenced (orphan) clean file behind."""
         target = self.accepted_dir / f"{stored_sha}.db"
+        if self._evidence_intact(stored_sha):
+            return
         partial = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
-        partial.write_bytes(clean)
-        os.replace(partial, target)
+        try:
+            fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_BINARY, 0o600)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(clean)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(partial, target)
+        finally:
+            partial.unlink(missing_ok=True)
+        _fsync_directory(self.accepted_dir)
 
     def _reject(self, received_sha: str, reason: str) -> None:
         """Record why an upload was refused. The uploaded bytes themselves are not kept."""
         note = self.rejected_dir / f"{received_sha}.reason.txt"
         note.write_text(reason + "\n", encoding="utf-8")
 
-    def _ingest(self, received_sha: str, stored_sha: str, info: SnapshotInfo) -> str:
-        """Merge a validated segment once. Its logical content decides duplicate vs conflict,
-        so the same segment in a bytewise-different file is a duplicate, not a conflict."""
+    def _ingest(
+        self, received_sha: str, stored_sha: str, clean: bytes, info: SnapshotInfo
+    ) -> Tuple[str, str | None]:
+        """Merge a validated segment once; returns (outcome, recorded stored_sha256).
+
+        Its logical content decides duplicate vs conflict, so the same segment in a
+        bytewise-different file is a duplicate, not a conflict. Rows that reuse sequence numbers
+        already stored for the install are a conflict too. The accepted file is written durably
+        before the upload is committed.
+        """
         meta = info.meta
         with self._ingest_lock:
             conn = sqlite3.connect(str(self.warehouse_path), timeout=30, isolation_level=None)
             try:
                 conn.execute("BEGIN IMMEDIATE")
                 existing = conn.execute(
-                    "SELECT content_digest FROM uploads WHERE install_id = ? AND segment_index = ?",
+                    "SELECT content_digest, stored_sha256 FROM uploads "
+                    "WHERE install_id = ? AND segment_index = ?",
                     (info.install_id, info.segment_index),
                 ).fetchone()
                 if existing is not None:
                     conn.execute("ROLLBACK")
-                    return "duplicate" if existing[0] == info.content_digest else "conflict"
+                    same = existing[0] == info.content_digest
+                    return ("duplicate" if same else "conflict"), str(existing[1])
+                if self._reuses_sequence_numbers(conn, info):
+                    conn.execute("ROLLBACK")
+                    return "sequence_conflict", None
+                self._store(stored_sha, clean)
                 upload: Dict[str, Any] = {
                     "install_id": info.install_id,
                     "segment_index": info.segment_index,
@@ -376,18 +535,50 @@ class Receiver:
                     columns = ("install_id", *COLUMNS[table])
                     placeholders = ",".join("?" for _ in columns)
                     conn.executemany(
-                        f"INSERT OR IGNORE INTO {table} ({','.join(columns)}) "
-                        f"VALUES ({placeholders})",
+                        f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})",
                         [(info.install_id, *row) for row in info.rows[table]],
                     )
+                self._relink_successor(conn, info)
                 conn.execute("COMMIT")
-                return "created"
+                return "created", stored_sha
             except BaseException:
                 if conn.in_transaction:
                     conn.execute("ROLLBACK")
                 raise
             finally:
                 conn.close()
+
+    @staticmethod
+    def _reuses_sequence_numbers(conn: sqlite3.Connection, info: SnapshotInfo) -> bool:
+        for table in DATA_TABLES:
+            seqs = [row[0] for row in info.rows[table]]
+            for start in range(0, len(seqs), 500):
+                chunk = seqs[start : start + 500]
+                hit = conn.execute(
+                    f"SELECT 1 FROM {table} WHERE install_id = ? "
+                    f"AND seq IN ({','.join('?' for _ in chunk)}) LIMIT 1",
+                    (info.install_id, *chunk),
+                ).fetchone()
+                if hit is not None:
+                    return True
+        return False
+
+    @staticmethod
+    def _relink_successor(conn: sqlite3.Connection, info: SnapshotInfo) -> None:
+        """A successor that arrived first was recorded as a gap; judge it now."""
+        row = conn.execute(
+            "SELECT prev_segment_digest FROM uploads WHERE install_id = ? AND segment_index = ?",
+            (info.install_id, info.segment_index + 1),
+        ).fetchone()
+        if row is not None:
+            conn.execute(
+                "UPDATE uploads SET chain_status = ? WHERE install_id = ? AND segment_index = ?",
+                (
+                    "ok" if row[0] == info.content_digest else "broken",
+                    info.install_id,
+                    info.segment_index + 1,
+                ),
+            )
 
     @staticmethod
     def _chain_status(conn: sqlite3.Connection, info: SnapshotInfo) -> str:
@@ -472,6 +663,10 @@ class ReceiverServer(ThreadingHTTPServer):
     def __init__(self, address: Tuple[str, int], receiver: Receiver) -> None:
         super().__init__(address, _Handler)
         self.receiver = receiver
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        # The stdlib default prints client_address to stderr; the receiver never records it.
+        _LOGGER.error("request handler failed: %s", type(sys.exc_info()[1]).__name__)
 
 
 def make_server(

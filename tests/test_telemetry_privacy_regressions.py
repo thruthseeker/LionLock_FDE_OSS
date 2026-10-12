@@ -1,4 +1,5 @@
-"""Privacy-boundary regressions for snapshot transfer (hidden bytes) and exported labels.
+"""Privacy-boundary regressions for snapshot transfer (hidden bytes) and exported labels, plus the
+R2 correction-round cases at the end of the file.
 
 Every case drives the checked-out ``lionlock`` package with synthetic data: fixtures are small
 SQLite files built in the test, HTTP stays on loopback, and each canary is first confirmed in its
@@ -11,9 +12,13 @@ import gzip
 import hashlib
 import json
 import logging
+import os
 import shutil
 import sqlite3
+import subprocess
+import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,10 +27,23 @@ from typing import Any, Callable, Dict, Iterator, List, Sequence, Tuple
 
 import pytest
 
+from lionlock.logging.token_auth import hash_token
+from lionlock.telemetry import export as export_module
 from lionlock.telemetry import policy
+from lionlock.telemetry import receiver as receiver_module
+from lionlock.telemetry import store as store_module
+from lionlock.telemetry import upload as upload_module
 from lionlock.telemetry.canonical import canonical_json
+from lionlock.telemetry.cli import main as cli_main
 from lionlock.telemetry.export import export_all, export_snapshot
-from lionlock.telemetry.receiver import Receiver, ReceiverConfig, make_server
+from lionlock.telemetry.receiver import (
+    WAREHOUSE_DDL,
+    Receiver,
+    ReceiverConfig,
+    WarehouseVersionError,
+    load_token_hashes,
+    make_server,
+)
 from lionlock.telemetry.snapshot import (
     EVENT_COLUMNS,
     TRUST_COLUMNS,
@@ -33,7 +51,7 @@ from lionlock.telemetry.snapshot import (
     validate_snapshot,
     write_snapshot,
 )
-from lionlock.telemetry.store import LogStore
+from lionlock.telemetry.store import STORE_APPLICATION_ID, LogStore, StoreError
 from lionlock.telemetry.upload import (
     CONTENT_TYPE,
     UPLOAD_PATH,
@@ -43,6 +61,11 @@ from lionlock.telemetry.upload import (
     upload_pending,
     upload_snapshot,
 )
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10; tomli is a declared dependency there
+    import tomli as tomllib
 
 APPENDED_CANARY = b"SYNTHETIC_PRIVATE_ASSET_CANARY_APPENDED_ONLY"
 RESIDUE_CANARY = b"SYNTHETIC_PRIVATE_ASSET_CANARY_DELETED_RESIDUE"
@@ -783,3 +806,1058 @@ def test_existing_upload_privacy_controls_remain_effective(tmp_path, monkeypatch
     assert {row[TRUST_COLUMNS.index("model_family")] for row in trust} == {"llama"}
     expected_key = policy.rekey(EXPORT_KEY, "session", RAW_SESSION_ID)
     assert {row[TRUST_COLUMNS.index("session_key")] for row in trust} == {expected_key}
+
+
+# =============================================================================================
+# Correction round R2: published package versions, warehouse compatibility, hash byte domains,
+# accepted-file durability and the reviewed findings. Failures are injected at module
+# boundaries the code already uses (``sqlite3``, ``os``, ``shutil``), so these cases run
+# unchanged before and after the fixes.
+# =============================================================================================
+
+REPO = Path(__file__).resolve().parents[1]
+# Verified public package versions: pyproject.toml has only ever declared 0.1.0, and the
+# repository has no tags or releases. Kept literal so this file runs against any revision.
+PUBLIC_PACKAGE_VERSIONS = ("0.1.0",)
+PRIVATE_NUMERIC_VERSION = "31.41.5926"
+PRIVATE_VERSION_LABELS = (
+    PRIVATE_NUMERIC_VERSION,
+    "1.2.3rc1",
+    "2.0.0.dev3",
+    "0.0.0-dev",
+    "0.1.0+acme.internal",
+    "acme-private-1.0",
+    "SyntheticPrivate-Orion",
+)
+
+# ---------------------------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------------------------
+
+
+def _attempt(receiver: Receiver, path: Path) -> Tuple[int, Dict[str, Any]]:
+    """Post a file's raw bytes to ``receiver``; an escaping exception counts as a 500, which is
+    what the HTTP layer turns it into."""
+    try:
+        result = receiver.handle_upload(_transport_headers(path), path.read_bytes())
+    except Exception as exc:  # noqa: BLE001 - the HTTP layer maps this to 500
+        return 500, {"status": "error", "error": f"exception: {type(exc).__name__}"}
+    return result.status, result.body
+
+
+def _rows(data_dir: Path, query: str) -> list:
+    conn = sqlite3.connect(f"{(data_dir / 'warehouse.db').resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        return conn.execute(query).fetchall()
+    finally:
+        conn.close()
+
+
+def _warehouse_counts(data_dir: Path) -> Tuple[int, ...]:
+    return tuple(
+        _rows(data_dir, f"SELECT COUNT(*) FROM {table}")[0][0]
+        for table in ("uploads", "events", "trust_records")
+    )
+
+
+def evidence_state(data_dir: Path) -> Dict[str, Any]:
+    """Committed uploads whose accepted file is missing or wrong, and unreferenced clean files."""
+    referenced = {row[0] for row in _rows(data_dir, "SELECT stored_sha256 FROM uploads")}
+    accepted = data_dir / "accepted"
+    files = {p.name[:-3]: p for p in accepted.glob("*.db")} if accepted.is_dir() else {}
+    dangling = sorted(
+        sha
+        for sha in referenced
+        if sha not in files or hashlib.sha256(files[sha].read_bytes()).hexdigest() != sha
+    )
+    orphans = sorted(set(files) - referenced)
+    return {"dangling": dangling, "orphans": orphans}
+
+
+def _quarantine_files(data_dir: Path) -> List[Path]:
+    return [p for p in (data_dir / "quarantine").rglob("*") if p.is_file()]
+
+
+def _segments(tmp_path: Path, events: int = 6, per: int = 2) -> List[Path]:
+    db = seed_store(tmp_path / "log" / "lionlock.db", events=events, trust=0)
+    results = export_all(LogStore(db), tmp_path / "outbox", rows_per_snapshot=per)
+    kept = []
+    for result in results:
+        target = tmp_path / "kept" / result.path.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(result.path, target)
+        kept.append(target)
+    return kept
+
+
+class _ConnShim:
+    """Delegates to a real connection; lets a test observe or fail a COMMIT on the warehouse."""
+
+    def __init__(self, conn: sqlite3.Connection, on_commit: Callable[[Any], None]) -> None:
+        self._conn = conn
+        self._on_commit = on_commit
+
+    def execute(self, sql: str, *args: Any) -> Any:
+        if sql.strip().upper() == "COMMIT":
+            self._on_commit(self._conn)
+        return self._conn.execute(sql, *args)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+    def __enter__(self) -> "_ConnShim":
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, *exc: Any) -> Any:
+        return self._conn.__exit__(*exc)
+
+
+class _Sqlite3Shim:
+    """Stands in for the receiver module's ``sqlite3``; wraps warehouse connections only."""
+
+    def __init__(self, on_commit: Callable[[Any], None]) -> None:
+        self._on_commit = on_commit
+
+    def connect(self, database: Any, *args: Any, **kwargs: Any) -> Any:
+        conn = sqlite3.connect(database, *args, **kwargs)
+        if str(database).endswith("warehouse.db"):
+            return _ConnShim(conn, self._on_commit)
+        return conn
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(sqlite3, name)
+
+
+# ---------------------------------------------------------------------------------------------
+# C1: package versions are admitted by membership in the verified public set
+# ---------------------------------------------------------------------------------------------
+
+
+def test_private_package_versions_never_leave_or_get_accepted(tmp_path, monkeypatch) -> None:
+    """Acceptance: private numeric and identifier-shaped versions become ``unknown`` in the
+    policy, export metadata, the request body and the User-Agent; a forged snapshot carrying
+    one is refused even with a recomputed digest; public versions pass; labels are idempotent."""
+    for value in PRIVATE_VERSION_LABELS:
+        assert policy.package_version_label(value) == "unknown", value
+    for value in (*PUBLIC_PACKAGE_VERSIONS, "unknown"):
+        assert policy.package_version_label(value) == value
+        assert policy.package_version_label(policy.package_version_label(value)) == value
+    assert policy.package_version_label(None) == "unknown"
+
+    # Ordinary export and upload while the installed version is a private numeric label.
+    monkeypatch.setattr(export_module, "get_lionlock_version", lambda _c: PRIVATE_NUMERIC_VERSION)
+    monkeypatch.setattr(upload_module, "get_lionlock_version", lambda _c: PRIVATE_NUMERIC_VERSION)
+    needle = PRIVATE_NUMERIC_VERSION.encode()
+    db = seed_store(tmp_path / "log" / "lionlock.db")
+    exported = export_all(LogStore(db), tmp_path / "outbox")
+    assert exported
+    for result in exported:
+        assert validate_snapshot(result.path).meta["lionlock_version"] == "unknown"
+        assert needle not in result.path.read_bytes()
+
+    handler = type("Capture", (_CaptureHandler,), {"captured": []})
+    server, url = _serve(handler)
+    try:
+        settings = resolve_upload_settings(_upload_config(tmp_path, db, url))
+        outcome = upload_snapshot(exported[0].path, settings)
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert outcome.status == "uploaded", outcome
+    assert len(handler.captured) == 1
+    headers, body = handler.captured[0]
+    assert needle not in gzip.decompress(body)
+    assert headers["user-agent"] == "lionlock/unknown"
+    assert not any(PRIVATE_NUMERIC_VERSION in value for value in headers.values())
+
+    # A directly submitted snapshot carrying the private version, digest recomputed.
+    clean = make_clean(tmp_path / "work")
+    forged = tmp_path / "work" / "forged_version.db"
+    info = validate_snapshot(clean)
+    meta = {k: v for k, v in info.meta.items() if k != "content_digest"}
+    meta["lionlock_version"] = PRIVATE_NUMERIC_VERSION
+    write_snapshot(forged, meta, info.rows)
+    assert needle in forged.read_bytes(), "precondition: private version in the forged file"
+    with pytest.raises(SnapshotError):
+        validate_snapshot(forged)
+    data_dir = tmp_path / "direct"
+    status, _body = _attempt(Receiver(ReceiverConfig(data_dir=data_dir)), forged)
+    assert status == 422
+    assert _warehouse_counts(data_dir) == (0, 0, 0)
+    assert not any(needle in p.read_bytes() for p in data_dir.rglob("*") if p.is_file())
+
+    # Public positive control: the verified public version is accepted end to end.
+    for version in PUBLIC_PACKAGE_VERSIONS:
+        public = tmp_path / "work" / f"public_{version}.db"
+        write_snapshot(public, {**meta, "lionlock_version": version}, info.rows)
+        assert validate_snapshot(public).meta["lionlock_version"] == version
+        target = tmp_path / f"direct-{version}"
+        assert _attempt(Receiver(ReceiverConfig(data_dir=target)), public)[0] == 201
+
+
+def test_declared_package_version_is_in_the_public_set() -> None:
+    """Drift guard: the version pyproject.toml declares must be admitted as itself."""
+    declared = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "version"
+    ]
+    assert declared in PUBLIC_PACKAGE_VERSIONS
+    assert policy.package_version_label(declared) == declared
+
+
+# ---------------------------------------------------------------------------------------------
+# C2: unsupported warehouses are refused before anything is changed
+# ---------------------------------------------------------------------------------------------
+
+
+def _v1_layout(conn: sqlite3.Connection) -> None:
+    conn.execute("CREATE TABLE uploads (file_sha256 TEXT PRIMARY KEY NOT NULL, install_id TEXT)")
+    conn.execute("CREATE TABLE events (install_id TEXT NOT NULL, seq INTEGER NOT NULL)")
+    conn.execute("INSERT INTO uploads VALUES ('ab', 'cd')")
+
+
+def _v2_wrong_columns(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE TABLE uploads (install_id TEXT NOT NULL, segment_index INTEGER NOT NULL, "
+        "file_sha256 TEXT NOT NULL, PRIMARY KEY (install_id, segment_index))"
+    )
+    conn.execute("INSERT INTO uploads VALUES ('ab', 1, 'cd')")
+    conn.execute("PRAGMA user_version=2")
+
+
+def _v2_missing_events(conn: sqlite3.Connection) -> None:
+    conn.execute(WAREHOUSE_DDL[0])
+    conn.execute(WAREHOUSE_DDL[1])
+    conn.execute("PRAGMA user_version=2")
+
+
+def _v2_wrong_key(conn: sqlite3.Connection) -> None:
+    for ddl in WAREHOUSE_DDL:
+        if "CREATE TABLE IF NOT EXISTS events" in ddl:
+            ddl = ddl.replace("PRIMARY KEY (install_id, seq)", "PRIMARY KEY (seq)")
+        conn.execute(ddl)
+    conn.execute("PRAGMA user_version=2")
+
+
+def _zero_row_foreign(conn: sqlite3.Connection) -> None:
+    conn.execute("CREATE TABLE notes (body TEXT)")
+
+
+def _foreign_application_id(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA application_id=1234567")
+
+
+UNSUPPORTED_WAREHOUSES: Dict[str, Callable[[sqlite3.Connection], None]] = {
+    "v1_layout": _v1_layout,
+    "v2_wrong_columns": _v2_wrong_columns,
+    "v2_missing_events": _v2_missing_events,
+    "v2_wrong_key": _v2_wrong_key,
+    "zero_row_foreign_table": _zero_row_foreign,
+    "foreign_application_id": _foreign_application_id,
+}
+
+
+def _snapshot_dir(data_dir: Path) -> Dict[str, Any]:
+    db = data_dir / "warehouse.db"
+    conn = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        header = tuple(
+            conn.execute(f"PRAGMA {name}").fetchone()[0]
+            for name in ("user_version", "application_id")
+        )
+        tables = [
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        ]
+        rows = {name: conn.execute(f'SELECT * FROM "{name}"').fetchall() for name in tables}
+    finally:
+        conn.close()
+    return {
+        "listing": sorted(str(p.relative_to(data_dir)) for p in data_dir.rglob("*")),
+        "sha256": sha256_file(db),
+        "mode": db.stat().st_mode & 0o777,
+        "header": header,
+        "rows": rows,
+    }
+
+
+@pytest.mark.parametrize("layout", sorted(UNSUPPORTED_WAREHOUSES))
+def test_unsupported_warehouse_is_refused_unchanged(tmp_path, layout) -> None:
+    """Acceptance: an unsupported warehouse is refused, and its bytes, mode, version fields,
+    records and the data directory listing are identical afterwards."""
+    data_dir = tmp_path / layout
+    data_dir.mkdir()
+    conn = sqlite3.connect(data_dir / "warehouse.db")
+    try:
+        UNSUPPORTED_WAREHOUSES[layout](conn)
+        conn.commit()
+    finally:
+        conn.close()
+    os.chmod(data_dir / "warehouse.db", 0o640)
+    before = _snapshot_dir(data_dir)
+    with pytest.raises(WarehouseVersionError):
+        Receiver(ReceiverConfig(data_dir=data_dir))
+    assert _snapshot_dir(data_dir) == before
+
+
+def test_supported_and_empty_warehouses_still_open(tmp_path) -> None:
+    """Positive controls: a new directory, a zero-length file and an existing v2 warehouse."""
+    fresh = tmp_path / "fresh"
+    Receiver(ReceiverConfig(data_dir=fresh))
+    Receiver(ReceiverConfig(data_dir=fresh))
+    assert _rows(fresh, "PRAGMA user_version") == [(2,)]
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    (empty / "warehouse.db").write_bytes(b"")
+    Receiver(ReceiverConfig(data_dir=empty))
+    assert _rows(empty, "PRAGMA user_version") == [(2,)]
+
+
+# ---------------------------------------------------------------------------------------------
+# C3: each hash field covers its declared byte domain
+# ---------------------------------------------------------------------------------------------
+
+
+def test_hash_fields_use_the_declared_byte_domains(tmp_path) -> None:
+    """Acceptance: the file-SHA header and Idempotency-Key equal the SHA-256 of the
+    decompressed request body (never of the gzip bytes); received_sha256 is that same digest
+    after bounded decompression; stored_sha256 is the accepted file's SHA-256; content_digest
+    is the logical digest of the stored rows."""
+    handler = type("Capture", (_CaptureHandler,), {"captured": []})
+    server, url = _serve(handler)
+    db = seed_store(tmp_path / "log" / "lionlock.db")
+    exported = export_all(LogStore(db), tmp_path / "outbox")
+    try:
+        settings = resolve_upload_settings(_upload_config(tmp_path, db, url))
+        assert upload_snapshot(exported[0].path, settings).status == "uploaded"
+    finally:
+        server.shutdown()
+        server.server_close()
+    headers, body = handler.captured[0]
+    assert headers["content-encoding"] == "gzip"
+    decompressed = gzip.decompress(body)
+    rebuilt_sha = hashlib.sha256(decompressed).hexdigest()
+    assert headers["x-lionlock-file-sha256"] == rebuilt_sha
+    assert headers["idempotency-key"] == rebuilt_sha
+    assert hashlib.sha256(body).hexdigest() != rebuilt_sha
+
+    data_dir = tmp_path / "server"
+    receiver = Receiver(ReceiverConfig(data_dir=data_dir))
+    result = receiver.handle_upload(headers, body)
+    assert result.status == 201, result.body
+    assert result.body["file_sha256"] == rebuilt_sha
+    received, stored, digest = _rows(
+        data_dir, "SELECT received_sha256, stored_sha256, content_digest FROM uploads"
+    )[0]
+    assert received == rebuilt_sha
+    accepted = data_dir / "accepted" / f"{stored}.db"
+    assert (
+        hashlib.sha256(accepted.read_bytes()).hexdigest() == stored == result.body["stored_sha256"]
+    )
+    assert (
+        digest == headers["x-lionlock-content-digest"] == validate_snapshot(accepted).content_digest
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# A1: accepted files are durable before an upload is recorded, and never silently missing
+# ---------------------------------------------------------------------------------------------
+
+
+def test_accepted_file_is_durable_before_the_upload_commits(tmp_path, monkeypatch) -> None:
+    """Acceptance: at the moment the warehouse COMMIT runs, the accepted file already exists
+    with the recorded stored_sha256 and has been fsynced."""
+    clean = make_clean(tmp_path / "work")
+    data_dir = tmp_path / "server"
+    receiver = Receiver(ReceiverConfig(data_dir=data_dir))
+    order: List[str] = []
+    observed: List[bool] = []
+    real_fsync = os.fsync
+
+    def recording_fsync(fd: int) -> None:
+        order.append("fsync")
+        real_fsync(fd)
+
+    def on_commit(conn: sqlite3.Connection) -> None:
+        order.append("commit")
+        for (stored,) in conn.execute("SELECT stored_sha256 FROM uploads").fetchall():
+            path = data_dir / "accepted" / f"{stored}.db"
+            observed.append(
+                path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == stored
+            )
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    monkeypatch.setattr(receiver_module, "sqlite3", _Sqlite3Shim(on_commit))
+    status, body = _attempt(receiver, clean)
+    assert status == 201, body
+    assert observed and all(observed), "the upload was recorded before its file existed"
+    assert "fsync" in order and order.index("fsync") < order.index("commit")
+    assert evidence_state(data_dir)["dangling"] == []
+
+
+def test_accepted_file_write_failure_then_retry_recovers(tmp_path, monkeypatch) -> None:
+    """Acceptance: a failed accepted-file write is not reported as success, leaves no committed
+    upload pointing at a missing file, and a retry stores the file."""
+    clean = make_clean(tmp_path / "work")
+    data_dir = tmp_path / "server"
+    receiver = Receiver(ReceiverConfig(data_dir=data_dir))
+    real_replace = os.replace
+    armed = [True]
+
+    def failing_replace(src: Any, dst: Any) -> None:
+        if armed[0] and Path(dst).parent == data_dir / "accepted":
+            raise OSError("injected accepted-file write failure")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+    status, _body = _attempt(receiver, clean)
+    assert status >= 500
+    assert evidence_state(data_dir)["dangling"] == []
+    assert _quarantine_files(data_dir) == []
+
+    armed[0] = False
+    status, body = _attempt(receiver, clean)
+    assert (status, body.get("status")) == (201, "created"), body
+    state = evidence_state(data_dir)
+    assert state["dangling"] == [] and _warehouse_counts(data_dir)[0] == 1
+
+
+def test_warehouse_insert_failure_then_retry_recovers(tmp_path) -> None:
+    """Acceptance: an INSERT failure records nothing, leaves no dangling reference, and a retry
+    succeeds. Clean orphans are allowed and reported."""
+    clean = make_clean(tmp_path / "work")
+    data_dir = tmp_path / "server"
+    receiver = Receiver(ReceiverConfig(data_dir=data_dir))
+    conn = sqlite3.connect(data_dir / "warehouse.db")
+    conn.execute(
+        "CREATE TRIGGER inject_failure BEFORE INSERT ON events "
+        "BEGIN SELECT RAISE(ABORT, 'injected insert failure'); END"
+    )
+    conn.commit()
+    status, _body = _attempt(receiver, clean)
+    assert status >= 500
+    assert _warehouse_counts(data_dir) == (0, 0, 0)
+    assert evidence_state(data_dir)["dangling"] == []
+    conn.execute("DROP TRIGGER inject_failure")
+    conn.commit()
+    conn.close()
+    status, body = _attempt(receiver, clean)
+    assert status == 201, body
+    assert evidence_state(data_dir)["dangling"] == []
+
+
+def test_warehouse_commit_failure_then_retry_recovers(tmp_path, monkeypatch) -> None:
+    """Acceptance: a failure at COMMIT (not at INSERT) records nothing, leaves no dangling
+    reference, may leave a reported clean orphan, and a retry succeeds."""
+    clean = make_clean(tmp_path / "work")
+    data_dir = tmp_path / "server"
+    receiver = Receiver(ReceiverConfig(data_dir=data_dir))
+    armed = [True]
+
+    def failing_commit(_conn: sqlite3.Connection) -> None:
+        if armed[0]:
+            armed[0] = False
+            raise sqlite3.OperationalError("injected commit failure")
+
+    monkeypatch.setattr(receiver_module, "sqlite3", _Sqlite3Shim(failing_commit))
+    status, _body = _attempt(receiver, clean)
+    assert status >= 500
+    assert armed[0] is False, "precondition: the COMMIT was reached and failed"
+    assert _warehouse_counts(data_dir) == (0, 0, 0)
+    first = evidence_state(data_dir)
+    assert first["dangling"] == []
+    assert len(first["orphans"]) <= 1
+    assert _quarantine_files(data_dir) == []
+
+    status, body = _attempt(receiver, clean)
+    assert status == 201, body
+    state = evidence_state(data_dir)
+    assert state["dangling"] == [] and state["orphans"] == []
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_duplicate_with_missing_or_corrupt_evidence_is_not_success(tmp_path, damage) -> None:
+    """Acceptance: a resend (same bytes, or the same content in different bytes) whose recorded
+    accepted file is missing or corrupt gets an explicit integrity failure, never ``duplicate``,
+    and the warehouse record is preserved."""
+    clean = make_clean(tmp_path / "work")
+    variant = make_bytewise_variant(clean, tmp_path / "work" / "variant.db")
+    data_dir = tmp_path / "server"
+    receiver = Receiver(ReceiverConfig(data_dir=data_dir))
+    assert _attempt(receiver, clean)[0] == 201
+    (stored,) = _rows(data_dir, "SELECT stored_sha256 FROM uploads")[0]
+    accepted = data_dir / "accepted" / f"{stored}.db"
+    if damage == "missing":
+        accepted.unlink()
+    else:
+        accepted.write_bytes(accepted.read_bytes()[:-1] + b"\x00")
+    record = _rows(data_dir, "SELECT * FROM uploads")
+    for resend in (clean, variant):
+        status, body = _attempt(receiver, resend)
+        assert not (200 <= status < 300), (resend.name, status, body)
+        assert body.get("status") != "duplicate"
+        assert _rows(data_dir, "SELECT * FROM uploads") == record
+
+
+def test_concurrent_equal_uploads_create_exactly_once_threads(tmp_path) -> None:
+    """Acceptance (threads, one process): identical and bytewise-different equal-content posts
+    racing on one receiver produce exactly one ``created`` and leave no dangling reference."""
+    clean = make_clean(tmp_path / "work")
+    variant = make_bytewise_variant(clean, tmp_path / "work" / "variant.db")
+    data_dir = tmp_path / "server"
+    receiver = Receiver(ReceiverConfig(data_dir=data_dir, max_concurrent_uploads=8))
+    barrier = threading.Barrier(6)
+    results: List[Tuple[int, Dict[str, Any]]] = []
+    lock = threading.Lock()
+
+    def worker(path: Path) -> None:
+        barrier.wait()
+        outcome = _attempt(receiver, path)
+        with lock:
+            results.append(outcome)
+
+    threads = [threading.Thread(target=worker, args=(p,)) for p in [clean, variant] * 3]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    statuses = sorted(status for status, _ in results)
+    assert statuses == [200] * 5 + [201], results
+    assert _warehouse_counts(data_dir)[0] == 1
+    assert evidence_state(data_dir)["dangling"] == []
+
+
+_CHILD = r"""
+import json, sys, time
+from pathlib import Path
+from lionlock.telemetry.receiver import Receiver, ReceiverConfig
+data_dir, snapshot, headers_json, go = sys.argv[1:5]
+receiver = Receiver(ReceiverConfig(data_dir=Path(data_dir)))
+deadline = time.time() + 30
+while not Path(go).exists() and time.time() < deadline:
+    time.sleep(0.005)
+try:
+    result = receiver.handle_upload(json.loads(headers_json), Path(snapshot).read_bytes())
+    print(json.dumps({"status": result.status, "body": result.body}))
+except Exception as exc:
+    print(json.dumps({"status": 500, "body": {"error": type(exc).__name__}}))
+"""
+
+
+def test_concurrent_equal_uploads_create_exactly_once_processes(tmp_path) -> None:
+    """Acceptance (two OS processes, one data directory): the same segment posted by separate
+    receiver processes released together is created exactly once, with its file present."""
+    clean = make_clean(tmp_path / "work")
+    variant = make_bytewise_variant(clean, tmp_path / "work" / "variant.db")
+    data_dir = tmp_path / "server"
+    Receiver(ReceiverConfig(data_dir=data_dir))
+    go = tmp_path / "go"
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
+    children = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _CHILD,
+                str(data_dir),
+                str(path),
+                json.dumps(_transport_headers(path)),
+                str(go),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            text=True,
+        )
+        for path in (clean, variant)
+    ]
+    time.sleep(1.0)
+    go.write_text("go")
+    outputs = []
+    for child in children:
+        out, err = child.communicate(timeout=60)
+        assert child.returncode == 0, err
+        outputs.append(json.loads(out.strip().splitlines()[-1]))
+    assert sorted(o["status"] for o in outputs) == [200, 201], outputs
+    assert _warehouse_counts(data_dir)[0] == 1
+    assert evidence_state(data_dir)["dangling"] == []
+
+
+def test_quarantine_cleanup_failure_is_reported(tmp_path, monkeypatch, caplog) -> None:
+    """Acceptance: if raw upload bytes cannot be removed, the upload does not succeed and the
+    failure is logged rather than swallowed."""
+    caplog.set_level(logging.ERROR)
+    clean = make_clean(tmp_path / "work")
+    data_dir = tmp_path / "server"
+    receiver = Receiver(ReceiverConfig(data_dir=data_dir))
+    real_rmtree = shutil.rmtree
+
+    def failing_rmtree(path: Any, *args: Any, **kwargs: Any) -> None:
+        if Path(path).parent == data_dir / "quarantine":
+            raise OSError("injected cleanup failure")
+        real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", failing_rmtree)
+    status, _body = _attempt(receiver, clean)
+    monkeypatch.setattr(shutil, "rmtree", real_rmtree)
+    assert not (200 <= status < 300)
+    assert _warehouse_counts(data_dir) == (0, 0, 0)
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "could not remove" in logged
+
+
+# ---------------------------------------------------------------------------------------------
+# B1-B9: reviewed bot findings in the allowed paths
+# ---------------------------------------------------------------------------------------------
+
+
+def test_b1_handler_errors_never_print_the_client_address(tmp_path, monkeypatch, capfd, caplog):
+    """B1: an unexpected handler exception is logged without the client address or port."""
+    caplog.set_level(logging.DEBUG)
+
+    def boom(self: Any) -> None:
+        raise RuntimeError("injected handler failure")
+
+    monkeypatch.setattr(receiver_module._Handler, "do_POST", boom)
+    server = make_server(ReceiverConfig(data_dir=tmp_path / "server"), host="127.0.0.1", port=0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    try:
+        import http.client
+
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            conn.request("POST", UPLOAD_PATH, body=b"x", headers={"Content-Length": "1"})
+            try:
+                conn.getresponse()
+            except (http.client.HTTPException, OSError):
+                pass
+        finally:
+            conn.close()
+        time.sleep(0.3)
+    finally:
+        server.shutdown()
+        server.server_close()
+    captured = capfd.readouterr()
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    text = captured.err + captured.out + logged
+    assert "injected handler failure" in text or "RuntimeError" in text, "precondition"
+    assert "127.0.0.1" not in text
+    assert f", {port})" not in text
+
+
+def test_b2_loopback_uploads_ignore_environment_proxies(tmp_path, monkeypatch) -> None:
+    """B2: a plain-http loopback upload goes straight to the endpoint, never via HTTP_PROXY."""
+    proxy_handler = type("Proxy", (_CaptureHandler,), {"captured": []})
+    target_handler = type("Target", (_CaptureHandler,), {"captured": []})
+    proxy, proxy_url = _serve(proxy_handler)
+    target, target_url = _serve(target_handler)
+    for name in ("no_proxy", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("http_proxy", proxy_url)
+    monkeypatch.setenv("HTTP_PROXY", proxy_url)
+    monkeypatch.setenv("LIONLOCK_UPLOAD_TOKEN", "llk_synthetic_never_to_a_proxy_0123")
+    try:
+        db = seed_store(tmp_path / "log" / "lionlock.db")
+        exported = export_all(LogStore(db), tmp_path / "outbox")
+        settings = resolve_upload_settings(_upload_config(tmp_path, db, target_url))
+        outcome = upload_snapshot(exported[0].path, settings)
+    finally:
+        for server in (proxy, target):
+            server.shutdown()
+            server.server_close()
+    assert proxy_handler.captured == [], "the snapshot and token were sent to a proxy"
+    assert len(target_handler.captured) == 1
+    assert outcome.status == "uploaded"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes only")
+def test_b3_existing_log_files_are_made_owner_only(tmp_path, monkeypatch) -> None:
+    """B3: an existing log is made owner-only on first open and after a cached open; foreign
+    files keep their bytes and mode; a failed chmod is reported, not ignored."""
+    original = tmp_path / "a" / "lionlock.db"
+    seed_store(original, events=1, trust=0)
+    copied = tmp_path / "b" / "lionlock.db"
+    copied.parent.mkdir()
+    shutil.copyfile(original, copied)
+    os.chmod(copied, 0o644)
+    LogStore(copied).append_event({"timestamp_utc": "2026-09-27T10:00:00Z", "decision": "ALLOW"})
+    assert copied.stat().st_mode & 0o777 == 0o600, "first open left an existing log readable"
+
+    os.chmod(original, 0o644)
+    LogStore(original).append_event({"timestamp_utc": "2026-09-27T10:00:00Z", "decision": "ALLOW"})
+    assert original.stat().st_mode & 0o777 == 0o600, "a cached open skipped the mode check"
+
+    foreign = tmp_path / "c" / "other.db"
+    foreign.parent.mkdir()
+    with sqlite3.connect(foreign) as conn:
+        conn.execute("PRAGMA application_id=1234567")
+        conn.execute("CREATE TABLE notes (body TEXT)")
+    os.chmod(foreign, 0o644)
+    before = sha256_file(foreign)
+    with pytest.raises(StoreError):
+        LogStore(foreign).append_event({"decision": "ALLOW"})
+    assert sha256_file(foreign) == before and foreign.stat().st_mode & 0o777 == 0o644
+
+    def failing_chmod(*_args: Any, **_kwargs: Any) -> None:
+        raise PermissionError("injected chmod failure")
+
+    monkeypatch.setattr(store_module.os, "chmod", failing_chmod)
+    with pytest.raises(StoreError):
+        LogStore(tmp_path / "d" / "lionlock.db").append_event({"decision": "ALLOW"})
+
+
+def _collide(source: Path, target: Path, seq_from: Path) -> Path:
+    """Rewrite a later segment so its event seqs reuse an earlier segment's, digest recomputed."""
+    seq = EVENT_COLUMNS.index("seq")
+    earlier = [row[seq] for row in validate_snapshot(seq_from).rows["events"]]
+    duration = EVENT_COLUMNS.index("duration_ms")
+
+    def edit(events: List[Any], _trust: List[Any]) -> None:
+        for row, reused in zip(events, earlier):
+            row[seq] = reused
+            row[duration] = 4242
+
+    return _rewrite(source, target, edit)
+
+
+def test_b4_sequence_collisions_are_conflicts_not_silent_drops(tmp_path) -> None:
+    """B4: a segment whose rows reuse already-stored sequence numbers is refused as a conflict
+    and changes nothing; it is not recorded as created with rows silently dropped."""
+    seg1, seg2, _seg3 = _segments(tmp_path)
+    colliding = _collide(seg2, tmp_path / "forged" / seg2.name, seg1)
+    validate_snapshot(colliding)
+    data_dir = tmp_path / "server"
+    receiver = Receiver(ReceiverConfig(data_dir=data_dir))
+    assert _attempt(receiver, seg1)[0] == 201
+    before = (_warehouse_counts(data_dir), _rows(data_dir, "SELECT * FROM events ORDER BY seq"))
+    status, body = _attempt(receiver, colliding)
+    assert status == 409, body
+    assert (
+        _warehouse_counts(data_dir),
+        _rows(data_dir, "SELECT * FROM events ORDER BY seq"),
+    ) == before
+    assert evidence_state(data_dir)["dangling"] == []
+
+
+def test_b5_chain_status_is_recomputed_when_a_predecessor_arrives(tmp_path) -> None:
+    """B5: uploading segment 2 before segment 1 ends with both ``ok``; a successor whose
+    declared predecessor digest is wrong ends ``broken``."""
+    seg1, seg2, _seg3 = _segments(tmp_path)
+    data_dir = tmp_path / "server"
+    receiver = Receiver(ReceiverConfig(data_dir=data_dir))
+    assert _attempt(receiver, seg2)[0] == 201
+    assert _rows(data_dir, "SELECT chain_status FROM uploads WHERE segment_index=2") == [("gap",)]
+    assert _attempt(receiver, seg1)[0] == 201
+    assert _rows(data_dir, "SELECT segment_index, chain_status FROM uploads ORDER BY 1") == [
+        (1, "ok"),
+        (2, "ok"),
+    ]
+
+    info = validate_snapshot(seg2)
+    meta = {k: v for k, v in info.meta.items() if k != "content_digest"}
+    meta["prev_segment_digest"] = "0" * 64
+    tampered = tmp_path / "forged" / "tampered_prev.db"
+    tampered.parent.mkdir(parents=True, exist_ok=True)
+    write_snapshot(tampered, meta, info.rows)
+    other = tmp_path / "server-tampered"
+    receiver = Receiver(ReceiverConfig(data_dir=other))
+    assert _attempt(receiver, tampered)[0] == 201
+    assert _attempt(receiver, seg1)[0] == 201
+    assert _rows(other, "SELECT chain_status FROM uploads WHERE segment_index=2") == [("broken",)]
+
+
+def _write_config(tmp_path: Path, **upload: Any) -> Path:
+    lines = [
+        "[logging]",
+        'backend = "sqlite"',
+        f'sqlite_path = "{tmp_path / "log" / "lionlock.db"}"',
+        "[telemetry_upload]",
+    ]
+    for key, value in upload.items():
+        lines.append(f"{key} = {json.dumps(value)}")
+    path = tmp_path / "lionlock.toml"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def cli_environment(monkeypatch) -> None:
+    """``load_config`` also reads these; the module's autouse fixture does not clear them."""
+    for name in ("LIONLOCK_TELEMETRY_DB_URI", "LIONLOCK_GATING_ENABLED"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _cli(capsys, *argv: str) -> Tuple[int, Dict[str, Any]]:
+    code = cli_main(list(argv))
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_b6_export_reports_rows_left_by_the_segment_cap(
+    tmp_path, monkeypatch, capsys, cli_environment
+) -> None:
+    """B6: when the per-run segment cap stops an export with rows left, the CLI says so and
+    exits non-zero; an export that finishes still exits 0 without the flag."""
+    seed_store(tmp_path / "log" / "lionlock.db", events=6, trust=0)
+    config = _write_config(tmp_path, rows_per_snapshot=2)
+    monkeypatch.setattr(export_module, "MAX_SEGMENTS_PER_RUN", 2)
+    code, out = _cli(capsys, "--config", str(config), "export", "--out", str(tmp_path / "o1"))
+    assert len(out["exported"]) == 2
+    assert out.get("more_pending") is True
+    assert code == 1
+
+    monkeypatch.setattr(export_module, "MAX_SEGMENTS_PER_RUN", 1_000)
+    code, out = _cli(capsys, "--config", str(config), "export", "--out", str(tmp_path / "o1"))
+    assert len(out["exported"]) == 1
+    assert not out.get("more_pending")
+    assert code == 0
+
+
+def test_b7_upload_exits_non_zero_when_a_snapshot_is_not_delivered(
+    tmp_path, capsys, cli_environment
+) -> None:
+    """B7: ``upload`` exits non-zero when a snapshot is rejected or invalid, and 0 when every
+    snapshot is delivered."""
+    handler = type("Capture", (_CaptureHandler,), {"captured": []})
+    server, url = _serve(handler)
+    try:
+        outbox = tmp_path / "outbox"
+        source = make_clean(tmp_path / "work")
+        outbox.mkdir()
+        make_invalid_reason(source, outbox / source.name)
+        config = _write_config(tmp_path, enabled=True, endpoint=url, outbox_dir=str(outbox))
+        code, out = _cli(capsys, "--config", str(config), "upload")
+        assert [u["status"] for u in out["uploads"]] == ["invalid"]
+        assert code == 1
+
+        seed_store(tmp_path / "log" / "lionlock.db", events=2, trust=0)
+        code, out = _cli(capsys, "--config", str(config), "upload")
+        assert [u["status"] for u in out["uploads"]] == ["uploaded"]
+        assert code == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "ok"),
+    [
+        ("https://telemetry.example.org:99999/x", False),
+        ("https://telemetry.example.org:abc/x", False),
+        ("http://127.0.0.1:70000", False),
+        ("https://telemetry.example.org:8443/x", True),
+        ("http://127.0.0.1:8787", True),
+    ],
+)
+def test_b8_malformed_ports_are_refused(endpoint, ok) -> None:
+    """B8: an endpoint whose port is not a valid TCP port is refused."""
+    assert (endpoint_problem(endpoint) is None) is ok
+
+
+def test_b9_store_refuses_a_non_empty_database_without_its_application_id(tmp_path) -> None:
+    """B9: a database with application_id 0 that already has tables (even with LionLock's table
+    names) is refused unchanged; an empty file and an existing LionLock log still open."""
+    path = tmp_path / "lookalike.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE events (body TEXT)")
+        conn.execute("INSERT INTO events VALUES ('synthetic foreign row')")
+    before = sha256_file(path)
+    with pytest.raises(StoreError):
+        LogStore(path).append_event({"decision": "ALLOW"})
+    assert sha256_file(path) == before
+
+    empty = tmp_path / "empty.db"
+    empty.write_bytes(b"")
+    LogStore(empty).append_event({"decision": "ALLOW"})
+    log = tmp_path / "log.db"
+    LogStore(log).append_event({"decision": "ALLOW"})
+    with sqlite3.connect(log) as conn:
+        assert conn.execute("PRAGMA application_id").fetchone()[0] == STORE_APPLICATION_ID
+    assert LogStore(log).counts()["events"] == 1
+
+
+# =============================================================================================
+# Follow-up review round: an explicitly empty token allowlist, literal matching of SQLite's
+# internal names, and the log's identity checked again on every open.
+# =============================================================================================
+
+
+class _IdleServer:
+    """Stands in for the HTTP server so `serve` returns instead of blocking."""
+
+    server_port = 8787
+
+    def serve_forever(self) -> None:
+        pass
+
+    def server_close(self) -> None:
+        pass
+
+
+def _record_server_starts(monkeypatch) -> List[Any]:
+    started: List[Any] = []
+
+    def factory(config: Any, **_kwargs: Any) -> _IdleServer:
+        started.append(config)
+        return _IdleServer()
+
+    monkeypatch.setattr(receiver_module, "make_server", factory)
+    return started
+
+
+def _run_serve_command(tmp_path: Path, *extra: str) -> int:
+    return cli_main(
+        [
+            "--config",
+            str(tmp_path / "absent.toml"),
+            "serve",
+            "--data-dir",
+            str(tmp_path / "receiver"),
+            *extra,
+        ]
+    )
+
+
+@pytest.mark.parametrize("contents", ["", "# synthetic comments-only allowlist\n\n"])
+def test_explicitly_empty_token_allowlist_refuses_to_start(
+    tmp_path, monkeypatch, capsys, cli_environment, contents
+) -> None:
+    """A token allowlist that is given but lists no hashes stops `serve` before a server or any
+    receiver state exists, instead of silently accepting anonymous uploads."""
+    allowlist = tmp_path / "token_hashes.txt"
+    allowlist.write_text(contents, encoding="utf-8")
+    started = _record_server_starts(monkeypatch)
+    code = _run_serve_command(tmp_path, "--token-hashes-file", str(allowlist))
+    assert code != 0, "an empty allowlist started the receiver in anonymous mode"
+    assert started == []
+    assert not (tmp_path / "receiver").exists()
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False and "token" in out["error"]
+    with pytest.raises(ValueError):
+        load_token_hashes(allowlist)
+
+
+def test_omitted_token_allowlist_keeps_anonymous_mode(
+    tmp_path, monkeypatch, capsys, cli_environment
+) -> None:
+    """Control: without --token-hashes-file the receiver still runs anonymously by design."""
+    started = _record_server_starts(monkeypatch)
+    assert _run_serve_command(tmp_path) == 0
+    assert len(started) == 1 and started[0].token_hashes == frozenset()
+    assert "anonymous" in capsys.readouterr().err
+
+
+def test_listed_tokens_are_still_required(tmp_path, monkeypatch, cli_environment) -> None:
+    """Control: a non-empty allowlist starts the receiver and admits only listed tokens."""
+    token = "synthetic-listed-token-control"
+    allowlist = tmp_path / "token_hashes.txt"
+    allowlist.write_text(f"# synthetic\n{hash_token(token)}\n", encoding="utf-8")
+    started = _record_server_starts(monkeypatch)
+    assert _run_serve_command(tmp_path, "--token-hashes-file", str(allowlist)) == 0
+    gate = Receiver(started[0])
+    assert gate.authorize(None) is False
+    assert gate.authorize("Bearer synthetic-unlisted-token") is False
+    assert gate.authorize(f"Bearer {token}") is True
+
+
+_PREFIXED_USER_TABLE = "sqliteX_customer_records"
+
+
+def _write_db(path: Path, *statements: str) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        for statement in statements:
+            conn.execute(statement)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _set_mode(path: Path, mode: int) -> None:
+    if os.name == "posix":
+        os.chmod(path, mode)
+
+
+def _fingerprint(path: Path) -> Tuple[str, Any]:
+    mode = path.stat().st_mode & 0o777 if os.name == "posix" else None
+    return sha256_file(path), mode
+
+
+_PREFIXED_TABLE_DDL = (
+    f"CREATE TABLE {_PREFIXED_USER_TABLE} (payload TEXT)",
+    f"INSERT INTO {_PREFIXED_USER_TABLE} VALUES ('synthetic foreign record')",
+)
+
+
+@pytest.mark.parametrize("layout", ["prefixed_table_only", "current_layout_plus_prefixed_table"])
+def test_sqlite_prefixed_user_tables_are_seen_by_the_warehouse_check(tmp_path, layout) -> None:
+    """A user table whose name merely starts like SQLite's internal names (sqliteX_...) is still
+    user schema: the warehouse is refused, with its bytes, mode, records and directory intact."""
+    data_dir = tmp_path / layout
+    data_dir.mkdir()
+    statements = _PREFIXED_TABLE_DDL
+    if layout == "current_layout_plus_prefixed_table":
+        statements = (*WAREHOUSE_DDL, "PRAGMA user_version=2", *_PREFIXED_TABLE_DDL)
+    _write_db(data_dir / "warehouse.db", *statements)
+    _set_mode(data_dir / "warehouse.db", 0o640)
+    before = _snapshot_dir(data_dir)
+    with pytest.raises(WarehouseVersionError):
+        Receiver(ReceiverConfig(data_dir=data_dir))
+    assert _snapshot_dir(data_dir) == before
+
+
+def test_sqlite_prefixed_user_tables_are_seen_by_the_log_check(tmp_path) -> None:
+    """The local log refuses a database whose only table is sqliteX_..., unchanged."""
+    path = tmp_path / "foreign.db"
+    _write_db(path, *_PREFIXED_TABLE_DDL)
+    _set_mode(path, 0o640)
+    before = _fingerprint(path)
+    with pytest.raises(StoreError):
+        LogStore(path).append_event({"decision": "ALLOW"})
+    assert _fingerprint(path) == before
+
+
+def test_replaced_log_file_is_checked_again_before_any_change(tmp_path) -> None:
+    """After a log has been opened, a different database moved onto the same path is checked
+    afresh and refused, with its bytes and mode unchanged."""
+    path = tmp_path / "active.db"
+    LogStore(path).append_event({"decision": "ALLOW"})
+    replacement = tmp_path / "replacement.db"
+    shutil.copyfile(path, replacement)
+    _write_db(replacement, "PRAGMA application_id=0", "PRAGMA user_version=0")
+    _set_mode(replacement, 0o640)
+    os.replace(replacement, path)
+    before = _fingerprint(path)
+    with pytest.raises(StoreError):
+        LogStore(path).append_event({"decision": "ALLOW"})
+    assert _fingerprint(path) == before
+
+
+def test_log_changed_in_place_is_checked_again_before_any_change(tmp_path) -> None:
+    """The same file losing its LionLock identity in place is refused by writes and reads."""
+    path = tmp_path / "active.db"
+    store = LogStore(path)
+    store.append_event({"decision": "ALLOW"})
+    inode = path.stat().st_ino
+    _write_db(path, "PRAGMA application_id=0")
+    _set_mode(path, 0o640)
+    assert path.stat().st_ino == inode
+    before = _fingerprint(path)
+    with pytest.raises(StoreError):
+        store.append_event({"decision": "ALLOW"})
+    assert _fingerprint(path) == before
+    with pytest.raises(StoreError):
+        store.counts()
+    assert _fingerprint(path) == before
+
+
+def test_repeated_opens_of_a_legitimate_log_keep_working(tmp_path) -> None:
+    """Control: ordinary repeated opens of a genuine log still append, read and verify."""
+    path = tmp_path / "lionlock.db"
+    for _ in range(3):
+        LogStore(path).append_event({"decision": "ALLOW"})
+    store = LogStore(path)
+    assert store.counts()["events"] == 3
+    assert all(status.ok for status in store.verify().values())
+    if os.name == "posix":
+        assert path.stat().st_mode & 0o777 == 0o600

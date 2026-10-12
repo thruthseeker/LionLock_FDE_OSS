@@ -102,6 +102,10 @@ _SCHEMA: Tuple[str, ...] = (
     "row_hash TEXT NOT NULL)",
 )
 
+# sqlite_master filter for objects that belong to the database's own schema. SQLite reserves the
+# literal prefix "sqlite_" for its internal objects; in LIKE, "_" is a wildcard, so it is escaped.
+USER_SCHEMA_OBJECTS = "name NOT LIKE 'sqlite!_%' ESCAPE '!'"
+
 _KNOWN_TABLES = {"log_meta", "sqlite_sequence", *LOG_TABLES}
 _SEVERITIES = {"green", "yellow", "orange", "red"}
 
@@ -423,6 +427,10 @@ class LogStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                # Whatever file is at the path now must still be this log, checked under the
+                # lock and before the mode or any row changes.
+                self._check_identity(conn)
+                self._ensure_private(always=False)
                 yield conn
             except BaseException:
                 conn.execute("ROLLBACK")
@@ -434,11 +442,14 @@ class LogStore:
         with self._connect() as conn:
             conn.execute("BEGIN")
             try:
+                self._check_identity(conn)
                 yield conn
             finally:
                 conn.execute("ROLLBACK")
 
     def _ensure_initialized(self) -> None:
+        # The cache only skips creating the schema again. It is not evidence of what the file
+        # at this path is now: _write and _read check that on every open.
         key = str(self.path.resolve())
         if key in _INITIALIZED and self.path.exists():
             return
@@ -446,7 +457,6 @@ class LogStore:
             if key in _INITIALIZED and self.path.exists():
                 return
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            is_new = not self.path.exists()
             conn = sqlite3.connect(str(self.path), timeout=BUSY_TIMEOUT_S, isolation_level=None)
             try:
                 conn.execute("BEGIN IMMEDIATE")
@@ -462,20 +472,40 @@ class LogStore:
                 raise
             finally:
                 conn.close()
-            if is_new:
-                try:
-                    os.chmod(self.path, 0o600)
-                except OSError:
-                    pass
+            # Only after _check_compatible accepted the file, so a foreign file is never touched.
+            self._ensure_private(always=True)
             _INITIALIZED.add(key)
+
+    def _ensure_private(self, *, always: bool) -> None:
+        """Make the log owner-only (POSIX). ``always`` is set on the first open in a process;
+        later writes re-check the mode so a file loosened since then is tightened again."""
+        if os.name != "posix":
+            return
+        try:
+            if always or self.path.stat().st_mode & 0o077:
+                os.chmod(self.path, 0o600)
+        except OSError as exc:
+            raise StoreError(f"could not make {self.path} private to its owner: {exc}") from exc
+
+    def _check_identity(self, conn: sqlite3.Connection) -> None:
+        """Refuse a file at this path that is not (or is no longer) an initialized LionLock log."""
+        app_id = int(conn.execute("PRAGMA application_id").fetchone()[0])
+        if app_id != STORE_APPLICATION_ID:
+            raise StoreError(f"{self.path} is not a LionLock log file; refusing to use it.")
+        self._check_compatible(conn)
 
     def _check_compatible(self, conn: sqlite3.Connection) -> None:
         app_id = int(conn.execute("PRAGMA application_id").fetchone()[0])
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        tables = {
-            str(row[0])
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-        }
+        entries = conn.execute(
+            f"SELECT type, name FROM sqlite_master WHERE {USER_SCHEMA_OBJECTS}"
+        ).fetchall()
+        tables = {str(name) for kind, name in entries if kind == "table"}
+        # A database without LionLock's application id is claimed only if it is empty: no
+        # schema of its own and no version stamp. Same-named tables are not enough.
+        empty = not entries and version == 0
+        if app_id == 0 and not empty:
+            raise StoreError(f"{self.path} is not a LionLock log file; refusing to write to it.")
         if app_id not in (0, STORE_APPLICATION_ID) or not tables <= _KNOWN_TABLES:
             raise StoreError(f"{self.path} is not a LionLock log file; refusing to write to it.")
         if version > STORE_SCHEMA_VERSION:

@@ -65,8 +65,11 @@ REASON_CODES = (
 SIGNAL_SCHEMA_VERSIONS = ("SE-0.2.0", "SE-0.3.0", "SE-0.4.0")
 TRUST_LOGIC_VERSIONS = ("TO-0.1.0",)
 RUNTIME_MODES = ("oss",)
+# Published lionlock package versions. Only the value pyproject.toml has ever declared is listed
+# (the repository has no tags or releases yet). A new release is added here in a reviewed change,
+# never from logs, the environment or a received value.
+PACKAGE_VERSIONS = ("0.1.0",)
 UNKNOWN_VERSION = "unknown"
-DEV_PACKAGE_VERSION = "0.0.0-dev"
 
 MAX_DURATION_MS = 86_400_000
 MAX_TURN_INDEX = 1_000_000_000
@@ -112,10 +115,6 @@ _MODEL_FAMILY_PATTERNS = tuple(
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 # Numeric release versions only (PEP 440 public form without local labels), so no name fits.
-_RELEASE_VERSION = re.compile(
-    r"^[0-9]{1,4}(?:\.[0-9]{1,4}){1,3}(?:(?:a|b|rc)[0-9]{1,4})?(?:\.post[0-9]{1,4})?"
-    r"(?:\.dev[0-9]{1,4})?$"
-)
 
 
 def rekey(export_key: str, namespace: str, value: str) -> str:
@@ -182,12 +181,12 @@ def signal_schema_version(value: Any) -> str:
 
 
 def package_version_label(value: Any) -> str:
-    """A numeric release version (or the OSS ``0.0.0-dev`` fallback), else ``unknown``."""
-    if isinstance(value, str) and (
-        value == DEV_PACKAGE_VERSION or _RELEASE_VERSION.fullmatch(value)
-    ):
-        return value
-    return UNKNOWN_VERSION
+    """A published package version from ``PACKAGE_VERSIONS``, else ``unknown``.
+
+    Membership, not shape: a private build number such as ``31.41.5926`` is as identifying as a
+    name, so it becomes ``unknown`` too.
+    """
+    return value if enum_or_none(value, PACKAGE_VERSIONS) else UNKNOWN_VERSION
 
 
 def platform_label(system: Any) -> str:

@@ -186,18 +186,37 @@ def export_snapshot(
     )
 
 
+class ExportBatch(List[ExportResult]):
+    """The segments one ``export_all`` run sealed. ``more_pending`` is True when the run stopped
+    at ``MAX_SEGMENTS_PER_RUN`` with logged rows still unexported."""
+
+    more_pending: bool = False
+
+
+def has_unexported_rows(store: LogStore) -> bool:
+    """Whether any table holds rows past its export watermark."""
+    with store.exclusive() as session:
+        state = session.meta(*(f"export:last_seq:{table}" for table in LOG_TABLES))
+        return any(
+            session.rows(table, after_seq=_int(state.get(f"export:last_seq:{table}")), limit=1)
+            for table in LOG_TABLES
+        )
+
+
 def export_all(
     store: LogStore,
     outbox_dir: str | Path,
     *,
     rows_per_snapshot: int = DEFAULT_ROWS_PER_SNAPSHOT,
-) -> List[ExportResult]:
-    results: List[ExportResult] = []
+) -> ExportBatch:
+    results = ExportBatch()
     for _ in range(MAX_SEGMENTS_PER_RUN):
         result = export_snapshot(store, outbox_dir, rows_per_snapshot=rows_per_snapshot)
         if result is None:
             break
         results.append(result)
+    else:
+        results.more_pending = has_unexported_rows(store)
     return results
 
 
