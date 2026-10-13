@@ -2,10 +2,14 @@ import json
 import sqlite3
 import tempfile
 import time
+from contextlib import closing
 from pathlib import Path
+from typing import Callable
+
+import pytest
 
 from lionlock.logging.event_log import FORBIDDEN_KEYS, log_event
-from lionlock.logging.sql_telemetry import get_writer
+from lionlock.logging.sql_telemetry import get_writer, stop_writer
 
 
 def _wait_for_signal_row(db_path: Path, table: str, timeout_s: float = 2.0) -> tuple | None:
@@ -126,3 +130,113 @@ def test_notes_allowlist_and_length_enforced() -> None:
         assert len(lines) == 2
         record = json.loads(lines[-1])
         assert record["notes"] == {"connector_meta": "ok"}
+        # Flush and join the SQL writer before tmpdir is deleted; otherwise its
+        # in-flight insert can recreate files there and make cleanup fail.
+        stop_writer()
+
+
+def _signal_event(request_id: str) -> dict:
+    return {
+        "timestamp_utc": "2025-12-19T00:00:00Z",
+        "request_id": request_id,
+        "decision": "ALLOW",
+        "severity": "green",
+        "reason_code": "ok",
+        "aggregate_score": 0.12,
+        "signal_scores": {"repetition_loopiness": 0.1},
+        "config_hash": "hash",
+        "duration_ms": 12,
+    }
+
+
+def _stored_request_ids(db_path: Path) -> list[str]:
+    with closing(sqlite3.connect(db_path)) as conn:
+        rows = conn.execute("SELECT request_id FROM lionlock_signals ORDER BY event_pk").fetchall()
+    return [row[0] for row in rows]
+
+
+def _wait_until(predicate: Callable[[], bool], timeout_s: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("condition not reached before timeout")
+        time.sleep(0.01)
+
+
+def test_stop_writer_flushes_events_logged_before_shutdown(tmp_path: Path) -> None:
+    db_path = tmp_path / "telemetry.db"
+    config = _build_config(db_path, tmp_path / "signals.jsonl", verbosity="normal", allowlist=[])
+    config["logging_sql"].update(batch_size=10, flush_interval_ms=60_000)
+    request_ids = [f"req-{i:02d}" for i in range(25)]
+    for request_id in request_ids:
+        log_event(_signal_event(request_id), config)
+
+    final = stop_writer()
+
+    # The last partial batch (req-20..24) is only written by the flush in stop_writer().
+    assert _stored_request_ids(db_path) == request_ids
+    assert final is not None
+    assert (final["written"], final["dropped"], final["failed"], final["pending"]) == (25, 0, 0, 0)
+
+
+def test_database_lock_is_retried_without_breaking_log_event(tmp_path: Path) -> None:
+    db_path = tmp_path / "telemetry.db"
+    config = _build_config(db_path, tmp_path / "signals.jsonl", verbosity="normal", allowlist=[])
+    log_event(_signal_event("req-before-lock"), config)
+    writer = get_writer(config["logging_sql"])
+    assert writer is not None
+    _wait_until(lambda: writer.stats()["written"] == 1)
+
+    locker = sqlite3.connect(db_path, isolation_level=None)
+    locker.execute("BEGIN EXCLUSIVE")  # Every insert now fails with "database is locked".
+    try:
+        log_event(_signal_event("req-during-lock-1"), config)
+        _wait_until(lambda: writer.stats()["retries"] >= 1)
+        assert "database is locked" in (writer.last_error or "")
+        # Previously the lock error disabled the writer and this call raised RuntimeError.
+        log_event(_signal_event("req-during-lock-2"), config)
+        assert writer.available
+    finally:
+        locker.execute("ROLLBACK")
+        locker.close()
+
+    _wait_until(lambda: writer.stats()["written"] == 3)
+    assert get_writer(config["logging_sql"]) is writer  # Same writer, never torn down.
+    final = stop_writer()
+    assert _stored_request_ids(db_path) == [
+        "req-before-lock",
+        "req-during-lock-1",
+        "req-during-lock-2",
+    ]
+    assert final is not None
+    assert (final["failed"], final["dropped"], final["pending"]) == (0, 0, 0)
+
+
+def test_stopped_writer_is_replaced_instead_of_raising(tmp_path: Path) -> None:
+    db_path = tmp_path / "telemetry.db"
+    config = _build_config(db_path, tmp_path / "signals.jsonl", verbosity="normal", allowlist=[])
+    writer = get_writer(config["logging_sql"])
+    assert writer is not None
+    writer.stop()
+
+    log_event(_signal_event("req-after-stop"), config)
+
+    replacement = get_writer(config["logging_sql"])
+    assert replacement is not writer and replacement is not None and replacement.available
+    stop_writer()
+    assert _stored_request_ids(db_path) == ["req-after-stop"]
+
+
+def test_writer_init_failure_raises_runtime_error(tmp_path: Path) -> None:
+    not_a_directory = tmp_path / "blocker"
+    not_a_directory.write_text("", encoding="utf-8")
+    config = _build_config(
+        not_a_directory / "telemetry.db",
+        tmp_path / "signals.jsonl",
+        verbosity="normal",
+        allowlist=[],
+    )
+
+    # Previously an AttributeError ('NoneType' object has no attribute 'error').
+    with pytest.raises(RuntimeError, match="SQL telemetry init failed"):
+        log_event(_signal_event("req-1"), config)

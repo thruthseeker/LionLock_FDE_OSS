@@ -173,3 +173,24 @@ def test_trust_overlay_invalid_record_no_writes(tmp_path: Path) -> None:
 
     assert list(jsonl_dir.glob("*")) == []
     assert db_path.exists() is False
+
+
+def test_trust_overlay_stop_writer_flushes_and_joins(tmp_path: Path) -> None:
+    db_path = tmp_path / "overlay.db"
+    config = _build_sql_config(db_path, enabled=True)
+    # Nothing flushes on its own: records are only written by the flush on stop.
+    config["trust_overlay"]["sql"].update(batch_size=1000, flush_interval_ms=60_000)
+    for _ in range(3):
+        append_trust_record(_build_record(config=config), base_dir=tmp_path, config=config)
+    writer = get_writer(config["trust_overlay"]["sql"])
+    assert writer is not None
+
+    final = stop_writer()
+
+    # Checked immediately, without polling: stop_writer() flushed and joined.
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM trust_overlay_records").fetchone()[0]
+    assert count == 3
+    assert writer.thread is not None and not writer.thread.is_alive()
+    assert final is not None
+    assert (final["written"], final["dropped"], final["failed"], final["pending"]) == (3, 0, 0, 0)
