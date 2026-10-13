@@ -1,8 +1,9 @@
 """``lionlock-telemetry``: inspect, verify, export, and upload the local SQLite log.
 
 Every command prints JSON. Only ``upload`` touches the network, and only when uploads are
-enabled; ``serve`` runs the reference ingest server. ``preview`` shows exactly what the next
-upload would contain without consuming anything.
+enabled; ``serve`` runs the reference ingest server, and ``bigquery-sync`` copies that server's
+warehouse into BigQuery. ``preview`` shows exactly what the next upload would contain without
+consuming anything.
 """
 
 from __future__ import annotations
@@ -196,6 +197,31 @@ def _cmd_serve(_config: Dict[str, Any], args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_bigquery_sync(_config: Dict[str, Any], args: argparse.Namespace) -> int:
+    from .bigquery_sync import (
+        BigQueryClient,
+        BigQuerySyncError,
+        SyncTarget,
+        metadata_token_provider,
+        sync,
+    )
+
+    target = SyncTarget(project=args.project, dataset=args.dataset, location=args.location)
+    client = BigQueryClient(target, metadata_token_provider())
+    try:
+        summary = sync(
+            Path(args.data_dir).expanduser(),
+            Path(args.state_file).expanduser(),
+            client,
+            batch_rows=max(1, int(args.batch_rows)),
+        )
+    except BigQuerySyncError as exc:
+        _print({"ok": False, "error": str(exc)})
+        return 1
+    _print(summary)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lionlock-telemetry",
@@ -225,6 +251,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--token-hashes-file", help="Require bearer tokens whose SHA-256 is listed in this file"
     )
     serve_parser.add_argument("--max-body-mb", type=int, default=16)
+    bq_parser = sub.add_parser(
+        "bigquery-sync", help="Copy new receiver warehouse rows into BigQuery, exactly once"
+    )
+    bq_parser.add_argument("--data-dir", required=True, help="The receiver's data directory")
+    bq_parser.add_argument("--state-file", required=True, help="Where sync progress is kept")
+    bq_parser.add_argument("--project", required=True)
+    bq_parser.add_argument("--dataset", required=True)
+    bq_parser.add_argument("--location", required=True, help="The dataset's location")
+    bq_parser.add_argument("--batch-rows", type=int, default=20_000)
     return parser
 
 
@@ -237,6 +272,7 @@ _COMMANDS = {
     "upload": _cmd_upload,
     "reset-identity": _cmd_reset_identity,
     "serve": _cmd_serve,
+    "bigquery-sync": _cmd_bigquery_sync,
 }
 
 
