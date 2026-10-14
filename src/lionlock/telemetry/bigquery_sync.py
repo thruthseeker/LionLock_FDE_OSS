@@ -51,8 +51,6 @@ APPEND_TABLES: Tuple[str, ...] = ("events", "trust_records")
 REPLACE_TABLES: Tuple[str, ...] = ("uploads",)
 DEFAULT_BATCH_ROWS = 20_000
 DEFAULT_BATCH_BYTES = 8 * 1024 * 1024
-# A job that ended in an error loaded nothing, so it may be retried under the next ID.
-MAX_ATTEMPTS = 5
 
 METADATA_TOKEN_URL = (
     "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
@@ -92,6 +90,8 @@ def urllib_transport(timeout_s: float = 60.0) -> Transport:
                 return response.status, response.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()
+        except OSError as exc:  # DNS failure, refused or reset connection, timeout
+            raise BigQuerySyncError(f"{method} {url.split('?')[0]} failed: {exc}") from exc
 
     return send
 
@@ -109,13 +109,15 @@ def metadata_token_provider(timeout_s: float = 10.0) -> Callable[[], str]:
         try:
             with opener.open(request, timeout=timeout_s) as response:
                 payload = json.loads(response.read())
-        except (OSError, ValueError) as exc:
+            access_token = str(payload["access_token"])
+            lifetime = int(payload.get("expires_in", 0))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
             raise BigQuerySyncError(
-                f"could not get an access token from the metadata server: {exc}"
+                f"could not get an access token from the metadata server: {exc!r}"
             ) from exc
-        cached["token"] = str(payload["access_token"])
-        cached["expires"] = time.monotonic() + max(0, int(payload.get("expires_in", 0)) - 60)
-        return str(cached["token"])
+        cached["token"] = access_token
+        cached["expires"] = time.monotonic() + max(0, lifetime - 60)
+        return access_token
 
     return token
 
@@ -165,6 +167,18 @@ class BigQueryClient:
                 f"reading job {job_id} failed: {_error_message(status, payload)}"
             )
         return dict(json.loads(payload))
+
+    def delete_table(self, table: str) -> None:
+        """Delete a table in the target dataset; a table that does not exist counts as deleted."""
+        url = (
+            f"{API_ROOT}/bigquery/v2/projects/{quote(self.target.project, safe='')}/datasets/"
+            f"{quote(self.target.dataset, safe='')}/tables/{quote(table, safe='')}"
+        )
+        status, payload = self._call("DELETE", url)
+        if status not in (200, 204, 404):
+            raise BigQuerySyncError(
+                f"deleting table {table} failed: {_error_message(status, payload)}"
+            )
 
     def submit_load(
         self, job_id: str, table: str, schema: List[Dict[str, str]], data: bytes, *, replace: bool
@@ -242,26 +256,32 @@ class BigQueryClient:
         rows: int,
         *,
         replace: bool,
+        attempt: int = 1,
+        record_failure: Callable[[int], None] = lambda _next_attempt: None,
     ) -> str:
         """Load ``data`` unless an earlier run already did; returns the ID of the job that did.
 
-        IDs ``base_id-1``, ``base_id-2``... are tried in order. An existing job that succeeded
-        means the batch is loaded. One that failed loaded nothing, so the next ID is tried, but
-        a job submitted by this call that fails stops the sync instead of being retried.
+        Job IDs are ``base_id-<attempt>``, starting from the first attempt not known to have
+        failed. An existing job that succeeded means the batch is loaded. A failed job loaded
+        nothing: ``record_failure`` is told the next attempt number so the state file remembers
+        it, and the next ID is tried. A job submitted by this call that fails stops the sync
+        instead, so a persistent error is retried once per run, never in a loop.
         """
-        for attempt in range(1, MAX_ATTEMPTS + 1):
+        while True:
             job_id = f"{base_id}-{attempt}"
-            submitted = False
             job = self.get_job(job_id)
-            if job is None:
+            submitted = job is None
+            if submitted:
                 self.submit_load(job_id, table, schema, data, replace=replace)
-                submitted = True
             job = self.wait(job_id)
             error = job.get("status", {}).get("errorResult")
             if error:
+                attempt += 1
+                record_failure(attempt)
                 if submitted:
                     raise BigQuerySyncError(
-                        f"load job {job_id} into {table} failed: {error.get('message', error)}"
+                        f"load job {job_id} into {table} failed: {error.get('message', error)}; "
+                        "nothing was loaded, and the next run retries it"
                     )
                 continue
             output = int(job.get("statistics", {}).get("load", {}).get("outputRows", -1))
@@ -270,10 +290,6 @@ class BigQueryClient:
                     f"load job {job_id} into {table} reports {output} rows, expected {rows}"
                 )
             return job_id
-        raise BigQuerySyncError(
-            f"{table}: {MAX_ATTEMPTS} load attempts for {base_id} failed; see the BigQuery job "
-            "history before retrying with a new state file"
-        )
 
 
 def _json_line(columns: Sequence[str], values: Sequence[Any]) -> bytes:
@@ -312,6 +328,11 @@ def _empty_state(target: SyncTarget) -> Dict[str, Any]:
         "watermarks": {table: 0 for table in APPEND_TABLES},
         "anchors": {table: "" for table in APPEND_TABLES},
         "replaced_sha256": {table: "" for table in REPLACE_TABLES},
+        # Counts completed replacements. It is part of each replacement's job ID, so content
+        # that recurs (a deletion can restore an earlier state) is loaded again, not skipped.
+        "replace_generation": {table: 0 for table in REPLACE_TABLES},
+        # The next job attempt for a table's current content, after failed loads of it.
+        "replace_attempts": {table: {"sha256": "", "attempt": 1} for table in REPLACE_TABLES},
         "pending": None,
     }
 
@@ -332,20 +353,40 @@ def load_state(path: Path, target: SyncTarget) -> Dict[str, Any]:
                 f"{getattr(target, key)!r}; use a new state file for a new destination"
             )
     expected = _empty_state(target)
-    for key in ("watermarks", "anchors", "replaced_sha256"):
+    for key in (
+        "watermarks",
+        "anchors",
+        "replaced_sha256",
+        "replace_generation",
+        "replace_attempts",
+    ):
         if not isinstance(state.get(key), dict) or set(state[key]) != set(expected[key]):
             raise BigQuerySyncError(f"state file {path} has a malformed {key!r}")
     for table, mark in state["watermarks"].items():
-        if not isinstance(mark, int) or isinstance(mark, bool) or mark < 0:
+        if not _count(mark, 0):
             raise BigQuerySyncError(f"state file {path} has a bad watermark for {table}")
+    for table, generation in state["replace_generation"].items():
+        if not _count(generation, 0):
+            raise BigQuerySyncError(f"state file {path} has a bad replace generation for {table}")
+    for table, entry in state["replace_attempts"].items():
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"sha256", "attempt"}
+            or not _count(entry["attempt"], 1)
+        ):
+            raise BigQuerySyncError(f"state file {path} has a bad replace attempt for {table}")
     pending = state.get("pending")
     if pending is not None:
-        keys = {"table", "first_rowid", "last_rowid", "rows", "sha256", "base_id"}
+        keys = {"table", "first_rowid", "last_rowid", "rows", "sha256", "base_id", "attempt"}
         if not isinstance(pending, dict) or set(pending) != keys:
             raise BigQuerySyncError(f"state file {path} has a malformed pending batch")
-        if pending["table"] not in APPEND_TABLES:
-            raise BigQuerySyncError(f"state file {path} has a pending batch for an unknown table")
+        if pending["table"] not in APPEND_TABLES or not _count(pending["attempt"], 1):
+            raise BigQuerySyncError(f"state file {path} has a malformed pending batch")
     return state
+
+
+def _count(value: Any, minimum: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
 
 
 def save_state(path: Path, state: Mapping[str, Any]) -> None:
@@ -471,6 +512,13 @@ def sync(
             schemas = {
                 table: table_schema(conn, table) for table in (*REPLACE_TABLES, *APPEND_TABLES)
             }
+            # Replaced tables go first: they do not depend on the append watermarks, so a
+            # deletion reaches them even when an append table stops on a missing anchor.
+            for table in REPLACE_TABLES:
+                summary["tables"][table] = _replace_table(
+                    conn, client, state, state_file, table, schemas[table]
+                )
+
             for table in APPEND_TABLES:
                 _check_anchor(conn, state, table, schemas[table][0])
                 summary["tables"][table] = {"rows_loaded": 0, "jobs": []}
@@ -478,28 +526,6 @@ def sync(
             pending = state["pending"]
             if pending is not None:
                 _finish_batch(conn, client, state, state_file, schemas, pending, summary)
-
-            for table in REPLACE_TABLES:
-                columns, fields = schemas[table]
-                order = "install_id, segment_index"
-                lines = [
-                    (0, _json_line(columns, row))
-                    for row in conn.execute(
-                        f"SELECT {', '.join(columns)} FROM {table} ORDER BY {order}"
-                    )
-                ]
-                data = _ndjson(lines)
-                digest = _sha256(data)
-                entry: Dict[str, Any] = {"rows": len(lines), "unchanged": True}
-                if lines and digest != state["replaced_sha256"][table]:
-                    base = _base_id(target, table, "all", data)
-                    entry["job"] = client.load_once(
-                        base, table, fields, data, len(lines), replace=True
-                    )
-                    entry["unchanged"] = False
-                    state["replaced_sha256"][table] = digest
-                    save_state(state_file, state)
-                summary["tables"][table] = entry
 
             for table in APPEND_TABLES:
                 columns, _fields = schemas[table]
@@ -518,6 +544,7 @@ def sync(
                         "rows": len(batch),
                         "sha256": _sha256(data),
                         "base_id": _base_id(target, table, f"{first}_{last}", data),
+                        "attempt": 1,
                     }
                     # Recorded before the job exists, so a crash resumes this exact range.
                     state["pending"] = pending
@@ -549,13 +576,84 @@ def _finish_batch(
             f"{table}: rows {pending['first_rowid']}-{pending['last_rowid']} changed since they "
             "were scheduled; refusing to load them"
         )
-    job_id = client.load_once(pending["base_id"], table, fields, data, len(lines), replace=False)
+
+    def record_failure(next_attempt: int) -> None:
+        state["pending"] = {**pending, "attempt": next_attempt}
+        save_state(state_file, state)
+
+    job_id = client.load_once(
+        pending["base_id"],
+        table,
+        fields,
+        data,
+        len(lines),
+        replace=False,
+        attempt=pending["attempt"],
+        record_failure=record_failure,
+    )
     state["watermarks"][table] = pending["last_rowid"]
     state["anchors"][table] = _sha256(lines[-1][1])
     state["pending"] = None
     save_state(state_file, state)
     summary["tables"][table]["rows_loaded"] += len(lines)
     summary["tables"][table]["jobs"].append(job_id)
+
+
+def _replace_table(
+    conn: sqlite3.Connection,
+    client: BigQueryClient,
+    state: Dict[str, Any],
+    state_file: Path,
+    table: str,
+    schema: Tuple[List[str], List[Dict[str, str]]],
+) -> Dict[str, Any]:
+    """Make the BigQuery table hold exactly the warehouse table's current rows."""
+    columns, fields = schema
+    order = "install_id, segment_index"
+    lines = [
+        (0, _json_line(columns, row))
+        for row in conn.execute(f"SELECT {', '.join(columns)} FROM {table} ORDER BY {order}")
+    ]
+    data = _ndjson(lines)
+    digest = _sha256(data)
+    entry: Dict[str, Any] = {"rows": len(lines), "unchanged": True}
+    loaded = state["replaced_sha256"][table]
+    if digest == loaded or (not lines and not loaded):
+        return entry  # unchanged, or empty and never copied
+    generation = state["replace_generation"][table] + 1
+    if lines:
+        tried = state["replace_attempts"][table]
+        entry["job"] = client.load_once(
+            _base_id(client.target, table, f"g{generation}", data),
+            table,
+            fields,
+            data,
+            len(lines),
+            replace=True,
+            attempt=tried["attempt"] if tried["sha256"] == digest else 1,
+            record_failure=_replace_failure_recorder(state, state_file, table, digest),
+        )
+    else:
+        # Every row was deleted. A load job cannot be relied on to accept an empty file, so
+        # the copy is cleared by deleting the table; the next replacement recreates it.
+        client.delete_table(table)
+        entry["deleted"] = True
+    entry["unchanged"] = False
+    state["replaced_sha256"][table] = digest
+    state["replace_generation"][table] = generation
+    state["replace_attempts"][table] = {"sha256": "", "attempt": 1}
+    save_state(state_file, state)
+    return entry
+
+
+def _replace_failure_recorder(
+    state: Dict[str, Any], state_file: Path, table: str, digest: str
+) -> Callable[[int], None]:
+    def record(next_attempt: int) -> None:
+        state["replace_attempts"][table] = {"sha256": digest, "attempt": next_attempt}
+        save_state(state_file, state)
+
+    return record
 
 
 def _no_gap(conn: sqlite3.Connection, table: str, after: int, first: int) -> bool:

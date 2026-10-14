@@ -355,7 +355,9 @@ it, remove its rows from `uploads`, `events`, and `trust_records`, along with th
 `accepted/` named by those rows' `stored_sha256`. `lionlock-telemetry reset-identity` rotates the install ID and pseudonymization
 key, so future uploads cannot be linked to past ones. If you copy the warehouse to BigQuery, delete
 the same rows there too (`DELETE FROM dataset.events WHERE install_id = '...'`, and likewise for
-`trust_records`; `uploads` is replaced on the next sync).
+`trust_records`). `uploads` is replaced on the next sync, which deletes the BigQuery table if no
+upload rows are left; if the deleted rows include the last ones copied, that sync then stops before
+the other tables (see below).
 
 ### Copying the warehouse to BigQuery
 
@@ -375,7 +377,12 @@ Nothing is transformed. Each BigQuery table has the warehouse table's columns, t
 `STRING`, `INTEGER`, `REAL` as `FLOAT`) and nullability, and each row is the warehouse row as
 canonical JSON. `events` and `trust_records` are appended to tables partitioned by load day, so a
 dataset's default partition expiration applies to them; `uploads` is small and its `chain_status`
-can change when a late segment arrives, so it is replaced as a whole whenever it changes.
+can change when a late segment arrives, so it is replaced as a whole whenever it changes. Each
+replacement has its own job ID, so content that recurs (a deletion can restore an earlier state)
+is loaded again rather than taken as already loaded, and when no upload rows are left the BigQuery
+table is deleted (an empty load is not a reliable way to clear it) and recreated by the next
+replacement. `uploads` is refreshed before the other tables, so a deletion reaches it even when
+they stop.
 
 Every row is loaded exactly once:
 
@@ -385,8 +392,11 @@ Every row is loaded exactly once:
   After a crash the same range is rebuilt byte for byte and the existing job is found, so the
   rows are not loaded a second time.
 - A batch counts as loaded only when BigQuery reports its job done with no error and with exactly
-  as many output rows as were sent. A failed load job loads nothing; the next run retries it under
-  the next job ID (at most five attempts), and the run that saw the failure stops with an error.
+  as many output rows as were sent. A failed load job loads nothing: the run that saw the failure
+  stops with an error, records the next attempt number in the state file, and the next run retries
+  the same batch under the next job ID. A persistent error is retried once per run until it is
+  fixed; it never stops the sync for good, and starting over with a new state file is never needed
+  (it would load every row again).
 - The state file keeps the hash of the last row loaded from each table. If that row is missing or
   different, for example because the warehouse was replaced or a deletion request removed it, the
   sync stops instead of risking skipped or repeated rows. A state file is tied to one project,
