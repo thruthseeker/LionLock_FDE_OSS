@@ -332,6 +332,9 @@ def test_public_label_sets_match_the_values_the_code_emits() -> None:
     ("value", "expected"),
     [
         ("0.1.0", "0.1.0"),
+        ("1.0.0b1", "1.0.0b1"),
+        ("1.0.0b2", "unknown"),
+        ("1.0.0b1+acme.internal", "unknown"),
         ("unknown", "unknown"),
         ("31.41.5926", "unknown"),
         ("1.2.3rc1", "unknown"),
