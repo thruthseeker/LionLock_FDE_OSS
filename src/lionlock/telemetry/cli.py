@@ -252,7 +252,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve_parser.add_argument("--max-body-mb", type=int, default=16)
     bq_parser = sub.add_parser(
-        "bigquery-sync", help="Copy new receiver warehouse rows into BigQuery, exactly once"
+        "bigquery-sync",
+        help="Copy the receiver warehouse into BigQuery (event and trust rows exactly once)",
     )
     bq_parser.add_argument("--data-dir", required=True, help="The receiver's data directory")
     bq_parser.add_argument("--state-file", required=True, help="Where sync progress is kept")

@@ -10,7 +10,8 @@ Only rows the receiver has already validated and committed are copied, and nothi
 transformed: each BigQuery table has the warehouse table's columns, types and nullability, and
 each row is the warehouse row serialized as canonical JSON (sorted keys, no whitespace).
 
-Every row is loaded exactly once:
+Each ``events`` and ``trust_records`` row is loaded exactly once, and ``uploads`` is kept as a
+snapshot:
 
 - ``events`` and ``trust_records`` are insert-only in the warehouse, so rows are copied in
   ``rowid`` order. Each batch is a fixed ``rowid`` range that is written to the state file

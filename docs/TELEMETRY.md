@@ -382,7 +382,8 @@ is loaded again rather than taken as already loaded, and when no upload rows are
 table is deleted (an empty load is not a reliable way to clear it) and recreated by the next
 replacement.
 
-Every row is loaded exactly once:
+Each `events` and `trust_records` row is loaded exactly once, and `uploads` is a snapshot that
+every replacement overwrites as a whole, so after a successful run it matches the warehouse:
 
 - New `events` and `trust_records` rows are copied in `rowid` order, in batches of at most 20,000
   rows and 8 MiB. Each batch's `rowid` range and SHA-256 are written to the state file before its
