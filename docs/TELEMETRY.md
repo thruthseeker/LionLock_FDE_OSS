@@ -355,9 +355,8 @@ it, remove its rows from `uploads`, `events`, and `trust_records`, along with th
 `accepted/` named by those rows' `stored_sha256`. `lionlock-telemetry reset-identity` rotates the install ID and pseudonymization
 key, so future uploads cannot be linked to past ones. If you copy the warehouse to BigQuery, delete
 the same rows there too (`DELETE FROM dataset.events WHERE install_id = '...'`, and likewise for
-`trust_records`). `uploads` is replaced on the next sync, which deletes the BigQuery table if no
-upload rows are left; if the deleted rows include the last ones copied, that sync then stops before
-the other tables (see below).
+`trust_records` and `uploads`). If the deleted rows include the last ones the sync copied, the sync
+stops before changing anything in BigQuery (see below).
 
 ### Copying the warehouse to BigQuery
 
@@ -381,8 +380,7 @@ can change when a late segment arrives, so it is replaced as a whole whenever it
 replacement has its own job ID, so content that recurs (a deletion can restore an earlier state)
 is loaded again rather than taken as already loaded, and when no upload rows are left the BigQuery
 table is deleted (an empty load is not a reliable way to clear it) and recreated by the next
-replacement. `uploads` is refreshed before the other tables, so a deletion reaches it even when
-they stop.
+replacement.
 
 Every row is loaded exactly once:
 
@@ -397,9 +395,10 @@ Every row is loaded exactly once:
   the same batch under the next job ID. A persistent error is retried once per run until it is
   fixed; it never stops the sync for good, and starting over with a new state file is never needed
   (it would load every row again).
-- The state file keeps the hash of the last row loaded from each table. If that row is missing or
-  different, for example because the warehouse was replaced or a deletion request removed it, the
-  sync stops instead of risking skipped or repeated rows. A state file is tied to one project,
+- The state file keeps the hash of the last row loaded from each table, and every run checks it
+  before changing anything in BigQuery. If that row is missing or different, for example because
+  the warehouse was replaced or a deletion request removed it, the sync stops without touching
+  BigQuery instead of risking overwritten, skipped or repeated rows. A state file is tied to one project,
   dataset and location; another destination needs a new state file.
 - Only one sync can use a state file at a time.
 

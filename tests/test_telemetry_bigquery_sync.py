@@ -394,7 +394,33 @@ def _delete_install(data_dir: Path, install_id: str) -> None:
             conn.execute(f"DELETE FROM {table} WHERE install_id = ?", (install_id,))
 
 
-def test_a_deletion_that_restores_earlier_uploads_content_reaches_bigquery(tmp_path) -> None:
+def _delete_uploads_rows(data_dir: Path, install_id: str | None = None) -> None:
+    """Change only uploads, leaving the append tables (and so their anchors) intact."""
+    with sqlite3.connect(data_dir / "warehouse.db") as conn:
+        if install_id is None:
+            conn.execute("DELETE FROM uploads")
+        else:
+            conn.execute("DELETE FROM uploads WHERE install_id = ?", (install_id,))
+
+
+def test_a_deletion_of_the_last_copied_rows_stops_before_bigquery_changes(tmp_path) -> None:
+    receiver, paths = _server(tmp_path, sizes=(3,))
+    _ingest(receiver, paths[0])
+    fake = FakeBigQuery()
+    _run(tmp_path, fake)
+    before = _bigquery_snapshot(fake)
+
+    _delete_install(tmp_path / "server", validate_snapshot(paths[0]).install_id)
+
+    # The deleted rows include the last ones copied, which is indistinguishable from a
+    # replaced warehouse, so the sync stops before touching BigQuery; the operator deletes the
+    # same rows there, as the deletion workflow documents.
+    with pytest.raises(BigQuerySyncError, match="missing or changed"):
+        _run(tmp_path, fake)
+    assert _bigquery_snapshot(fake) == before
+
+
+def test_uploads_content_that_recurs_is_loaded_again(tmp_path) -> None:
     receiver = Receiver(ReceiverConfig(data_dir=tmp_path / "server"))
     first = _segments(tmp_path / "install-x", (3,))[0]
     second = _segments(tmp_path / "install-y", (2,))[0]
@@ -406,32 +432,31 @@ def test_a_deletion_that_restores_earlier_uploads_content_reaches_bigquery(tmp_p
     _run(tmp_path, fake)
     assert len(fake.tables["uploads"]) == 2
 
-    _delete_install(tmp_path / "server", validate_snapshot(second).install_id)
-    # The deleted install's rows were the last ones copied, so the append tables stop for an
-    # operator, but uploads is replaced first even though its content matches an earlier copy.
-    with pytest.raises(BigQuerySyncError, match="missing or changed"):
-        _run(tmp_path, fake)
+    # uploads returns to content an earlier job already loaded; a content-only job ID would
+    # find that job and skip the replacement, leaving the removed row in BigQuery.
+    _delete_uploads_rows(tmp_path / "server", validate_snapshot(second).install_id)
+    summary = _run(tmp_path, fake)
 
+    assert summary["tables"]["uploads"]["unchanged"] is False
     assert fake.tables["uploads"] == earlier_uploads
     assert fake.tables["uploads"] == _warehouse_rows(tmp_path / "server", "uploads")
 
 
-def test_uploads_are_cleared_in_bigquery_when_every_install_is_deleted(tmp_path) -> None:
+def test_an_emptied_uploads_table_is_cleared_in_bigquery_once(tmp_path) -> None:
     receiver, paths = _server(tmp_path, sizes=(3,))
     _ingest(receiver, paths[0])
     fake = FakeBigQuery()
     _run(tmp_path, fake)
     assert len(fake.tables["uploads"]) == 1
 
-    _delete_install(tmp_path / "server", validate_snapshot(paths[0]).install_id)
-    with pytest.raises(BigQuerySyncError, match="missing or changed"):
-        _run(tmp_path, fake)
+    _delete_uploads_rows(tmp_path / "server")
+    summary = _run(tmp_path, fake)
 
+    assert summary["tables"]["uploads"]["deleted"] is True
     assert "uploads" not in fake.tables and fake.deletes == ["uploads"]
     state = load_state(tmp_path / "bq" / "state.json", TARGET)
     assert state["replaced_sha256"]["uploads"] == hashlib.sha256(b"").hexdigest()
-    with pytest.raises(BigQuerySyncError, match="missing or changed"):
-        _run(tmp_path, fake)
+    _run(tmp_path, fake)
     assert fake.deletes == ["uploads"]  # cleared once, not on every run
     _client(fake).delete_table("uploads")  # already gone (a retry after a crash): not an error
 
@@ -474,19 +499,32 @@ def test_a_state_file_for_another_destination_is_refused(tmp_path) -> None:
         sync(tmp_path / "server", tmp_path / "bq" / "state.json", other)
 
 
-def test_a_replaced_warehouse_is_refused(tmp_path) -> None:
+def _bigquery_snapshot(fake: FakeBigQuery):
+    return json.dumps(fake.tables, sort_keys=True), len(fake.posts), list(fake.deletes)
+
+
+@pytest.mark.parametrize("replacement_segments", [(5,), ()], ids=["other-data", "empty"])
+def test_a_replaced_warehouse_is_refused_before_bigquery_changes(
+    tmp_path, replacement_segments
+) -> None:
     receiver, paths = _server(tmp_path, sizes=(3,))
     _ingest(receiver, paths[0])
     fake = FakeBigQuery()
     _run(tmp_path, fake)
+    before = _bigquery_snapshot(fake)
 
     shutil.rmtree(tmp_path / "server")
     other_receiver = Receiver(ReceiverConfig(data_dir=tmp_path / "server"))
-    for path in _segments(tmp_path / "other-client", (5,)):
+    for path in (
+        _segments(tmp_path / "other-client", replacement_segments) if replacement_segments else []
+    ):
         _ingest(other_receiver, path)
 
     with pytest.raises(BigQuerySyncError, match="missing or changed"):
         _run(tmp_path, fake)
+
+    # Nothing was loaded, replaced or deleted on the strength of the replaced warehouse.
+    assert _bigquery_snapshot(fake) == before
 
 
 def test_a_concurrent_sync_is_refused(tmp_path) -> None:

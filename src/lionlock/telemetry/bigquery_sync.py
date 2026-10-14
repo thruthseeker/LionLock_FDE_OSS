@@ -22,8 +22,9 @@ Every row is loaded exactly once:
 
 Load jobs are atomic, and a batch counts as loaded only when BigQuery reports the job done with
 no error and with exactly as many output rows as were sent. The state file also keeps the hash
-of the last row loaded from each table; if that row no longer matches (for example, the
-warehouse was replaced), the sync refuses to continue rather than skip or repeat rows.
+of the last row loaded from each table, and every run checks it before changing anything in
+BigQuery; if that row no longer matches (for example, the warehouse was replaced), the sync stops
+without touching BigQuery rather than overwrite, skip or repeat rows.
 
 Credentials come from the Compute Engine metadata server (the VM's attached service account),
 so no key file is needed.
@@ -512,13 +513,8 @@ def sync(
             schemas = {
                 table: table_schema(conn, table) for table in (*REPLACE_TABLES, *APPEND_TABLES)
             }
-            # Replaced tables go first: they do not depend on the append watermarks, so a
-            # deletion reaches them even when an append table stops on a missing anchor.
-            for table in REPLACE_TABLES:
-                summary["tables"][table] = _replace_table(
-                    conn, client, state, state_file, table, schemas[table]
-                )
-
+            # Nothing in BigQuery changes until the warehouse is shown to be the one copied so
+            # far, so a replaced or tampered warehouse can never overwrite the copy.
             for table in APPEND_TABLES:
                 _check_anchor(conn, state, table, schemas[table][0])
                 summary["tables"][table] = {"rows_loaded": 0, "jobs": []}
@@ -526,6 +522,11 @@ def sync(
             pending = state["pending"]
             if pending is not None:
                 _finish_batch(conn, client, state, state_file, schemas, pending, summary)
+
+            for table in REPLACE_TABLES:
+                summary["tables"][table] = _replace_table(
+                    conn, client, state, state_file, table, schemas[table]
+                )
 
             for table in APPEND_TABLES:
                 columns, _fields = schemas[table]
