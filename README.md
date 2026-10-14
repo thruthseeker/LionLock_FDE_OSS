@@ -1,10 +1,10 @@
-# LionLock FDE – Pre-Beta Public Release
+# LionLock FDE – Public Beta (1.0.0b1)
 
 **LionLock_FDE** is a modular **Fatigue Detection Engine** and **Trust Telemetry System** for LLMs.
 
 It’s designed to detect signal drift, compute deterministic gate decisions, and log behavioral metadata for downstream analysis.
 
-This is the **Open Source Public Preview** of LionLock, suitable for developers, researchers, and AI safety teams. No premium modules or proprietary datasets are included.
+This is the **first public beta** of open-source LionLock (version `1.0.0b1`), suitable for developers, researchers, and AI safety teams. No premium modules or proprietary datasets are included.
 
 ---
 

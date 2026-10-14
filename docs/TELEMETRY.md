@@ -136,7 +136,7 @@ otherwise (including rejected or invalid snapshots), and 2 when uploads are disa
 | `install_id` | Random 128-bit ID, created on first export; rotate with `reset-identity` |
 | `segment_index`, `prev_segment_digest` | Segment counter and the digest of the previous segment |
 | `content_digest` | SHA-256 over the canonical content of this snapshot |
-| `lionlock_version` | A published LionLock release (currently only `0.1.0`); anything else, including private or development build numbers, becomes `unknown` |
+| `lionlock_version` | A published LionLock release (currently `0.1.0` or `1.0.0b1`); anything else, including private or development build numbers, becomes `unknown` |
 | `python` | Major.minor only, for example `3.11` |
 | `platform` | `linux`, `macos`, `windows`, `freebsd`, or `other` |
 | `<table>_rows`, `<table>_pruned_before_export` | Row counts and rows lost to local pruning |
@@ -353,7 +353,57 @@ fatigue score itself is uncalibrated — see the note on `FATIGUE_SIGMOID_GAIN` 
 `lionlock-telemetry status` shows an install's `install_id`. To delete everything uploaded under
 it, remove its rows from `uploads`, `events`, and `trust_records`, along with the files in
 `accepted/` named by those rows' `stored_sha256`. `lionlock-telemetry reset-identity` rotates the install ID and pseudonymization
-key, so future uploads cannot be linked to past ones.
+key, so future uploads cannot be linked to past ones. If you copy the warehouse to BigQuery, delete
+the same rows there too (`DELETE FROM dataset.events WHERE install_id = '...'`, and likewise for
+`trust_records` and `uploads`). If the deleted rows include the last ones the sync copied, the sync
+stops before changing anything in BigQuery (see below).
+
+### Copying the warehouse to BigQuery
+
+`lionlock-telemetry bigquery-sync` copies rows the receiver has already validated and committed
+into a BigQuery dataset. It uses only the standard library, needs no key file (it takes access
+tokens from the Compute Engine metadata server, so run it on a VM whose attached service account
+has `roles/bigquery.dataEditor` on the dataset and `roles/bigquery.jobUser` on the project, with
+the `bigquery` access scope), and is meant to run hourly next to the receiver:
+
+```bash
+lionlock-telemetry bigquery-sync --data-dir /var/lib/lionlock-telemetry \
+    --state-file /var/lib/lionlock-bigquery/state.json \
+    --project my-project --dataset lionlock_telemetry --location us-central1
+```
+
+Nothing is transformed. Each BigQuery table has the warehouse table's columns, types (`TEXT` as
+`STRING`, `INTEGER`, `REAL` as `FLOAT`) and nullability, and each row is the warehouse row as
+canonical JSON. `events` and `trust_records` are appended to tables partitioned by load day, so a
+dataset's default partition expiration applies to them; `uploads` is small and its `chain_status`
+can change when a late segment arrives, so it is replaced as a whole whenever it changes. Each
+replacement has its own job ID, so content that recurs (a deletion can restore an earlier state)
+is loaded again rather than taken as already loaded, and when no upload rows are left the BigQuery
+table is deleted (an empty load is not a reliable way to clear it) and recreated by the next
+replacement.
+
+Each `events` and `trust_records` row is loaded exactly once, and `uploads` is a snapshot that
+every replacement overwrites as a whole, so after a successful run it matches the warehouse:
+
+- New `events` and `trust_records` rows are copied in `rowid` order, in batches of at most 20,000
+  rows and 8 MiB. Each batch's `rowid` range and SHA-256 are written to the state file before its
+  load job is submitted, and the job ID is derived from the destination, the range and that hash.
+  After a crash the same range is rebuilt byte for byte and the existing job is found, so the
+  rows are not loaded a second time.
+- A batch counts as loaded only when BigQuery reports its job done with no error and with exactly
+  as many output rows as were sent. A failed load job loads nothing: the run that saw the failure
+  stops with an error, records the next attempt number in the state file, and the next run retries
+  the same batch under the next job ID. A persistent error is retried once per run until it is
+  fixed; it never stops the sync for good, and starting over with a new state file is never needed
+  (it would load every row again).
+- The state file keeps the hash of the last row loaded from each table, and every run checks it
+  before changing anything in BigQuery. If that row is missing or different, for example because
+  the warehouse was replaced or a deletion request removed it, the sync stops without touching
+  BigQuery instead of risking overwritten, skipped or repeated rows. A state file is tied to one project,
+  dataset and location; another destination needs a new state file.
+- Only one sync can use a state file at a time.
+
+The command prints a JSON summary of the rows and jobs it loaded, and exits non-zero on any error.
 
 ## Threat model
 
