@@ -210,10 +210,11 @@ same way (see below).
 
 ## Running the receiver
 
-The reference receiver uses only the Python standard library:
+The reference receiver uses only the Python standard library. Install a tagged release from this
+repository:
 
 ```bash
-pip install lionlock
+pip install "lionlock @ git+https://github.com/thruthseeker/LionLock_FDE_OSS@v1.0.0b1"
 lionlock-telemetry serve --data-dir /var/lib/lionlock-telemetry --host 127.0.0.1 --port 8787
 ```
 
