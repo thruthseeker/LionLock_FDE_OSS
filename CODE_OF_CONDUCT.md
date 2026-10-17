@@ -6,4 +6,4 @@ In short: be respectful, assume good faith, keep criticism about the work, and d
 
 ## Reporting
 
-Report unacceptable behavior to the maintainers privately, using the contact button on the [project site](https://thruthseeker.github.io/LionLock_FDE_OSS/#contact). Reports are handled privately, and the maintainers may remove comments, close threads or block participants who break this code.
+Report unacceptable behavior to the maintainers privately: open the repository's **Security** tab, choose **Report a vulnerability**, and start the title with "Conduct report". Only the maintainers can see it. For abuse that breaks GitHub's own rules, you can also use GitHub's **Report content** option. Reports are handled privately, and the maintainers may remove comments, close threads or block participants who break this code.

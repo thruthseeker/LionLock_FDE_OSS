@@ -4,11 +4,13 @@ set -e
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT_DIR"
 
-if [ ! -d ".venv" ]; then
-  python -m venv .venv
+VENV_PATH="${LIONLOCK_VENV_PATH:-$ROOT_DIR/.venv}"
+
+if [ ! -d "$VENV_PATH" ]; then
+  python -m venv "$VENV_PATH"
 fi
 
-. .venv/bin/activate
+. "$VENV_PATH/bin/activate"
 
 pip install --upgrade pip
 pip install -e ".[dev]"
