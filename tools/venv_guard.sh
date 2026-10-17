@@ -6,10 +6,8 @@ set -eu
 
 script_path="${BASH_SOURCE:-$0}"
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$script_path")/.." && pwd)
-VENV_PATH="/home/master/Desktop/lionlock_artifacts/publicrepo_LionLock_FDE/.venv"
-if [ -n "${LIONLOCK_VENV_PATH:-}" ] && [ "${LIONLOCK_VENV_PATH}" != "$VENV_PATH" ]; then
-  fail "LIONLOCK_VENV_PATH must be $VENV_PATH (got ${LIONLOCK_VENV_PATH})"
-fi
+# Set LIONLOCK_VENV_PATH to keep the venv outside the repository; the default is <repo>/.venv.
+VENV_PATH="${LIONLOCK_VENV_PATH:-$ROOT_DIR/.venv}"
 
 fail() {
   echo "[venv_guard] $*" >&2
