@@ -39,13 +39,13 @@ policy:
   codex_context_tags:
     - env: ".venv"
     - env_path: "${LIONLOCK_VENV_PATH:-<repo>/.venv}"
-    - env_source: "external"
+    - env_source: "repo-local by default; external when LIONLOCK_VENV_PATH is set"
     - workspace_integrity: "locked"
 
   justification: >
-    The `.venv` folder is deliberately placed outside the project tree to avoid
-    bloating the working directory. At ~500-800MB, `.venv` is too large to be
-    co-located with code. This structure:
+    The default `.venv` lives in the repository root and is git-ignored, so a
+    fresh clone works with no extra setup. Set `LIONLOCK_VENV_PATH` to keep the
+    environment (~500-800MB) outside the project tree instead. This structure:
     - Keeps the repo lightweight and portable
     - Prevents accidental commit of heavy runtime files
     - Isolates interpreter state for multi-env builds
