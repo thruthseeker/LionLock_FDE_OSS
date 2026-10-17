@@ -1,7 +1,8 @@
 # Security Policy
 
 ## Reporting Vulnerabilities
-- Email: security@lionlock.example
+- Report privately through GitHub: open the repository's **Security** tab and choose **Report a vulnerability**. Only the maintainers can see the report.
+- Please do not open a public issue for a suspected vulnerability.
 - Include affected component, version (commit hash), and reproduction steps.
 - Expect first response within 72 hours; coordinated disclosure is appreciated.
 

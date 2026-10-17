@@ -15,11 +15,18 @@ dependencies = [
   "pydantic>=2.0",
 ]
 classifiers = [
+  "Development Status :: 4 - Beta",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent",
 ]
+
+[project.urls]
+Homepage = "https://github.com/thruthseeker/LionLock_FDE_OSS"
+Source = "https://github.com/thruthseeker/LionLock_FDE_OSS"
+Changelog = "https://github.com/thruthseeker/LionLock_FDE_OSS/blob/main/CHANGELOG.md"
+Issues = "https://github.com/thruthseeker/LionLock_FDE_OSS/issues"
 
 [project.optional-dependencies]
 dev = [
