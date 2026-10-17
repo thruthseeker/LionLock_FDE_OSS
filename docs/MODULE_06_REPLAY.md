@@ -5,7 +5,7 @@ LionLock Module 06 replays gating decisions from SQL telemetry and compares them
 ## CLI
 
 ```
-lionlock-replay --db sqlite:///path/to/telemetry.db --policy GC-0.3.1
+python -m lionlock.replay.cli --db sqlite:///path/to/telemetry.db --policy GC-0.3.1
 ```
 
 Optional flags:

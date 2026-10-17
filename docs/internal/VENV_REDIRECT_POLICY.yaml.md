@@ -5,12 +5,10 @@ policy:
     consistent builds, prevents repo pollution, and maintains weight discipline
     by isolating runtime state outside the project tree.
 
-  environment_path: "/home/master/Desktop/lionlock_artifacts/publicrepo_LionLock_FDE/.venv"
+  environment_path: "${LIONLOCK_VENV_PATH:-<repo>/.venv}"
 
   forbidden_paths:
-    - "/home/master/Desktop/publicrepo_LionLock_FDE/.venv"   # workspace venv (disallowed to avoid repo bloat)
-    - "/home/master/desktop/lionlock_assets/publicrepo_lionlock_FDE/.venv"   # legacy policy path (explicitly disallowed now)
-    - Any `.venv` directory outside `/home/master/Desktop/lionlock_artifacts/publicrepo_LionLock_FDE/.venv`
+    - Any `.venv` directory other than the configured environment path
 
   enforcement:
     - All CLI tooling (e.g., `pip`, `python`, `pytest`) must activate this `.venv`
@@ -32,7 +30,7 @@ policy:
   bootstrap:
     auto_create_if_missing: true
     use_requirements_file: "requirements.txt"
-    target_path: "/home/master/Desktop/lionlock_artifacts/publicrepo_LionLock_FDE/.venv"
+    target_path: "${LIONLOCK_VENV_PATH:-<repo>/.venv}"
 
   environment_proof:
     hash_executable: true
@@ -40,7 +38,7 @@ policy:
 
   codex_context_tags:
     - env: ".venv"
-    - env_path: "/home/master/Desktop/lionlock_artifacts/publicrepo_LionLock_FDE/.venv"
+    - env_path: "${LIONLOCK_VENV_PATH:-<repo>/.venv}"
     - env_source: "external"
     - workspace_integrity: "locked"
 

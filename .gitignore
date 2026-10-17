@@ -24,8 +24,15 @@ web/
 project_lockdown/
 ui/
 
-# Python cache and IDE files
+# Python cache, virtualenvs, build output and IDE files
 __pycache__/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+build/
+dist/
 *.pyc
 *.pyo
 *.pyd

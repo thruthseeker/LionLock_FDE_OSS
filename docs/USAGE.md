@@ -23,15 +23,12 @@ logger.close()
 - If you skip the editable install, run tests with `PYTHONPATH=src`.
 - Byte-compile sources: `python -m compileall src`
 
-## Docker
-- Build the test image: `docker compose build`
-- Run the suite in a container: `docker compose run --rm lionlock-test`
-
 ## Local CI Checks
 - Run the full lint/type/test suite: `bash tools/ci_local.sh` (requires dev extras installed)
 
 ## Developer Setup (one-command helper)
-- `bash tools/dev_setup.sh` uses `tools/venv_guard.sh` to enforce the external venv, installs dev extras, and runs pytest.
+- `bash tools/dev_setup.sh` creates `.venv` in the repository if needed, installs dev extras, and runs pytest.
+- `tools/venv_guard.sh` checks that the venv at `$LIONLOCK_VENV_PATH` (default `<repo>/.venv`) is the active interpreter.
 
 ## Lockdown Workflow
 - Run `./tools/lockdown.sh` to generate a SHA256 manifest and OpenTimestamps proof.
