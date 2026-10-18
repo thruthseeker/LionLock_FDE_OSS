@@ -27,7 +27,7 @@ logger.close()
 - Run the full lint/type/test suite: `bash tools/ci_local.sh` (requires dev extras installed)
 
 ## Developer Setup (one-command helper)
-- `bash tools/dev_setup.sh` creates `.venv` in the repository if needed, installs dev extras, and runs pytest.
+- `bash tools/dev_setup.sh` creates the venv at `$LIONLOCK_VENV_PATH` (default `<repo>/.venv`) if needed, installs dev extras, and runs pytest.
 - `tools/venv_guard.sh` checks that the venv at `$LIONLOCK_VENV_PATH` (default `<repo>/.venv`) is the active interpreter.
 
 ## Lockdown Workflow

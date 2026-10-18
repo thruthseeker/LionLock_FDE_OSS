@@ -1,6 +1,6 @@
 # LionLock FDE – Public Beta (1.0.0b1)
 
-**LionLock_FDE** scores LLM replies with fixed, deterministic rules, turns those scores into a gate decision, and logs what it decided to a tamper-evident local file.
+**LionLock_FDE** scores LLM replies with fixed, deterministic rules and turns those scores into a gate decision. It also provides a tamper-evident local log to record those decisions in.
 
 No AI model is involved in scoring or deciding: the same input always gives the same output. This is the **first public beta** of open-source LionLock (version `1.0.0b1`), suitable for developers, researchers, and AI safety teams. Interfaces may change before 1.0.0. No premium modules or proprietary datasets are included.
 
@@ -10,7 +10,7 @@ No AI model is involved in scoring or deciding: the same input always gives the 
 
 - **Scores** a prompt and reply with lexical heuristics: repetition, low novelty, sentence structure, and drift from the prompt's words.
 - **Decides** a severity band (green, yellow, orange, red) and a suggested action (`ALLOW`, `REFRESH`, `BLOCK`), with the signal and reason that triggered it.
-- **Logs** each decision to a local, hash-chained SQLite file you can verify.
+- **Logs** decisions you record to a local, hash-chained SQLite file you can verify. Scoring and deciding do not write the log themselves; [`examples/quickstart.py`](examples/quickstart.py) shows the logging calls.
 
 LionLock **does not stop a model call by itself**: it returns a decision, and your code acts on it (see [`docs/GATING_POLICY.md`](docs/GATING_POLICY.md)). Its signals are text heuristics, not fact-checking: they catch loops and some structural problems but can miss a fluent, off-topic answer, and no accuracy figures have been published yet. The fatigue score is uncalibrated and never raises a decision on its own when its inputs are missing.
 
@@ -52,6 +52,9 @@ pip install lionlock==1.0.0b1
 ```python
 from lionlock.core.scoring import score_response
 from lionlock.core.gating import evaluate_policy
+
+prompt = "What is the capital of France?"
+reply = "The capital of France is Paris."
 
 decision = evaluate_policy(score_response(prompt, reply))
 print(decision.severity, decision.gating_decision, decision.reason_code)

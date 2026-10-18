@@ -2,8 +2,9 @@ policy:
   purpose: >
     Enforce deterministic virtual environment usage for all local execution,
     Codex agents, and dev tooling in the LionLock FDE workspace. Ensures
-    consistent builds, prevents repo pollution, and maintains weight discipline
-    by isolating runtime state outside the project tree.
+    consistent builds and prevents repo pollution by keeping runtime state in one
+    known environment: a git-ignored `<repo>/.venv` by default, or the path in
+    `LIONLOCK_VENV_PATH` to keep it outside the project tree.
 
   environment_path: "${LIONLOCK_VENV_PATH:-<repo>/.venv}"
 
@@ -39,14 +40,14 @@ policy:
   codex_context_tags:
     - env: ".venv"
     - env_path: "${LIONLOCK_VENV_PATH:-<repo>/.venv}"
-    - env_source: "external"
+    - env_source: "repo-local by default; external when LIONLOCK_VENV_PATH is set"
     - workspace_integrity: "locked"
 
   justification: >
-    The `.venv` folder is deliberately placed outside the project tree to avoid
-    bloating the working directory. At ~500-800MB, `.venv` is too large to be
-    co-located with code. This structure:
-    - Keeps the repo lightweight and portable
+    The default `.venv` lives in the repository root and is git-ignored, so a
+    fresh clone works with no extra setup. Set `LIONLOCK_VENV_PATH` to keep the
+    environment (~500-800MB) outside the project tree instead. This structure:
+    - Keeps commits lightweight and portable (the environment is never tracked)
     - Prevents accidental commit of heavy runtime files
     - Isolates interpreter state for multi-env builds
     - Enhances Codex and VS Code agent clarity
