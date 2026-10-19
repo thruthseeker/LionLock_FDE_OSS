@@ -285,7 +285,10 @@ class LogStore:
         self, path: str | Path = DEFAULT_SQLITE_PATH, *, max_rows: int = DEFAULT_MAX_ROWS
     ) -> None:
         self.path = Path(path).expanduser()
-        self.max_rows = max(0, int(max_rows))
+        self.max_rows = int(max_rows)
+        if self.max_rows < 0:
+            # 0 means "keep every row"; letting -1 collapse to 0 would silently turn pruning off.
+            raise ValueError("max_rows must be 0 (keep every row) or a positive row count")
 
     def append_event(self, record: Mapping[str, Any]) -> int:
         """Append one sanitized public event (see ``event_log.sanitize_public_event``)."""
@@ -536,5 +539,7 @@ def open_store(config: Mapping[str, Any] | None) -> LogStore:
     try:
         max_rows_int = int(max_rows)
     except (TypeError, ValueError):
+        max_rows_int = DEFAULT_MAX_ROWS
+    if max_rows_int < 0:
         max_rows_int = DEFAULT_MAX_ROWS
     return LogStore(resolve_sqlite_path(config), max_rows=max_rows_int)

@@ -130,6 +130,14 @@ def test_pruning_keeps_the_chain_verifiable(tmp_path: Path, monkeypatch) -> None
     assert store.verify()["events"].ok is True
 
 
+def test_negative_row_limit_never_turns_pruning_off(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        LogStore(tmp_path / "lionlock.db", max_rows=-1)
+    config = {"logging": {"sqlite_path": str(tmp_path / "lionlock.db"), "sqlite_max_rows": -1}}
+    assert store_module.open_store(config).max_rows == store_module.DEFAULT_MAX_ROWS
+    assert LogStore(tmp_path / "lionlock.db", max_rows=0).max_rows == 0
+
+
 def test_concurrent_writers_do_not_fork_the_chain(tmp_path: Path) -> None:
     path = tmp_path / "lionlock.db"
     errors: list[BaseException] = []

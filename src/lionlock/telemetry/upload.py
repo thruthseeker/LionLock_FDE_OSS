@@ -106,6 +106,19 @@ def _env_bool(name: str) -> bool | None:
     return None
 
 
+def _config_bool(value: Any) -> bool:
+    """A config switch, failing closed.
+
+    ``bool("false")`` is True, so a quoted ``enabled = "false"`` used to switch uploads on. Only a
+    real boolean or a recognised true word turns a switch on; anything else leaves it off.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUE
+    return False
+
+
 def _as_float(value: Any, default: float) -> float:
     try:
         return float(value)
@@ -164,7 +177,7 @@ def _load_token(cfg: Mapping[str, Any]) -> str | None:
 def resolve_upload_settings(config: Mapping[str, Any] | None) -> UploadSettings:
     raw = config.get("telemetry_upload", {}) if isinstance(config, Mapping) else {}
     cfg: Mapping[str, Any] = raw if isinstance(raw, Mapping) else {}
-    enabled = bool(cfg.get("enabled", False))
+    enabled = _config_bool(cfg.get("enabled", False))
     toggle = _env_bool("LIONLOCK_TELEMETRY_UPLOAD")
     if toggle is not None:
         enabled = toggle
