@@ -1,0 +1,33 @@
+{
+  "files": {
+    ".devcontainer/devcontainer.json": "5ff0139e904a6a7e29c6167eafe9cbcd8ae492c0ac2f56fad3dc74dd112d5dcf",
+    ".github/workflows/verify.yml": "123ed67519f8f906fa922b35b3e2dc897a9b489c376246469ba252e8e6009a89",
+    ".python-version": "7b55f8e67b5623c4bef3fa691288da9437d79d3aba156de48d481db32ac7d16d",
+    "AGENTS.md": "10b850c5dd8f20ea2618877a9ab81831ce8b4fbe9490ec57b722c1d8fbb442ab",
+    "GEMINI.md": "9f043aeed003a80df8aa9fc7890d0bbcc9ced27f8dfec2a5f5940e21ff9615b9",
+    "Makefile": "7415bec07d10757f3b997a0218170e9378f6f491b42f2c610e8ed8c16e24dc77",
+    "harness/README.md": "77e711c1d56fe66cf77840ccccfa85758e202485f4e782984606aa0c9948e2a2",
+    "harness/__init__.py": "f90b9dd8d8de4f9cc5302e69d4c94913206edb81b7600486863b4d5bd427a610",
+    "harness/__main__.py": "e89b8c9c6e3a4af30cea28103d63ba25ac8e2cbfe311547295bd19382e6f1b21",
+    "harness/baseline/format.json": "cd8f33e06228bfd43fc4a965a055edd14d6c0848db85d749b130bd0624559d94",
+    "harness/baseline/mypy.json": "82d1a95ebe6af0204ca307996d68f2281fcd7cf9baa26cbce753802ed55032ea",
+    "harness/baseline/ruff.json": "2573b049521dc5b9953b6c47d858540ee07e0cc695843a853a2b8b6e0061ea50",
+    "harness/env/requirements-private.in": "7cf2c5636dc9ef488b5f74ca66d6cd336592f4394374803977d597d1d9682556",
+    "harness/env/requirements-private.lock": "06713d9e81ec6236f8f75c2730eca31586ccb0c3753b844a904d203f1fc01d53",
+    "harness/env/requirements.in": "ef38efba513cfe1228eba45e00edd2e675d7261cd499091ba9da3e1a776ead67",
+    "harness/env/requirements.lock": "1469f2e2f46271dfe7149f49c0151e634c3cef6c3ff2c9fba7eea329f6edbfcc",
+    "harness/fingerprint.py": "053d03beac36659a60f2145dd0ac7697201ee43a9f52bc6b0c65b0377c2dc2e6",
+    "harness/specs.py": "c1f148f5474625720ab82afec9ea46e9e90dd5cf365917814438bf18b1de5ef5",
+    "harness/specs/LD-0001/SPEC.md": "9bed44e92c0f731e3eaecc806f82d8a5507519a6756169d09d03b30c1596c2e0",
+    "harness/specs/LD-0001/product.py": "3aebb6eb5fc75f1685e2bd61d71b4b8f1ac1a36e9a405bdf75051a66820e7c82",
+    "harness/specs/LD-0001/test_acceptance.py": "e501252be2e3675f0b7187da3889eb251289761cbbcf588fe0fe14eff8249c17",
+    "harness/specs/LL-0001/SPEC.md": "8c7b5bab902d0b359737e2a3ec8c44222f2602be746ad31726e03d09b99dc50f",
+    "harness/specs/LL-0001/corpus.json": "9c29f05a427dc3f5dc93a04ffed54ea9a0369317afce581e958d0cf3242f14e6",
+    "harness/specs/LL-0001/golden.json": "56c1acf4903df85412af2f9301de9e42e76141002dbd28721ac1e103785f5085",
+    "harness/specs/LL-0001/oracle.py": "93b9edbdb822523b28a1d8631e13ce4c0a4a43a2d562cf94766f11e0e30341dc",
+    "harness/specs/LL-0001/product.py": "3527a030d5f1787c689eaa3dbe470e5464a0a14f804099eb7a2618bb911b1bbd",
+    "harness/specs/LL-0001/test_acceptance.py": "01d326ee8049282ee41f4b7320fec325deddd225888d534f58f7d01027711c0b",
+    "harness/specs/TEMPLATE.md": "c21fd2d7a33fb01826d6b1ee08262d2e961d4790619e42bcf7d6f20bb649b981",
+    "harness/verify.py": "2c1f29c5d0a68c12be93d54c2acc78c7e5c87ba2a15cd014198786d5661ddc70"
+  }
+}

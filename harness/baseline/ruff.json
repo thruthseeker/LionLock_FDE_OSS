@@ -1,0 +1,257 @@
+[
+  [
+    "src/lionlock/anomaly/detector.py",
+    "E501",
+    "Line too long (102 > 100)"
+  ],
+  [
+    "src/lionlock/anomaly/detector.py",
+    "E501",
+    "Line too long (103 > 100)"
+  ],
+  [
+    "src/lionlock/anomaly/detector.py",
+    "E501",
+    "Line too long (111 > 100)"
+  ],
+  [
+    "src/lionlock/anomaly/schemas.py",
+    "F401",
+    "`typing.Iterable` imported but unused"
+  ],
+  [
+    "src/lionlock/config.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "src/lionlock/core/scoring.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "src/lionlock/logging/anomaly_sql.py",
+    "E501",
+    "Line too long (106 > 100)"
+  ],
+  [
+    "src/lionlock/logging/anomaly_sql.py",
+    "E501",
+    "Line too long (116 > 100)"
+  ],
+  [
+    "src/lionlock/logging/anomaly_sql.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "src/lionlock/logging/connection.py",
+    "E501",
+    "Line too long (103 > 100)"
+  ],
+  [
+    "src/lionlock/logging/event_log.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "src/lionlock/logging/events_sql.py",
+    "F401",
+    "`typing.Iterable` imported but unused"
+  ],
+  [
+    "src/lionlock/logging/missed_signal_sql.py",
+    "F401",
+    "`typing.Iterable` imported but unused"
+  ],
+  [
+    "src/lionlock/logging/sql_init.py",
+    "E501",
+    "Line too long (102 > 100)"
+  ],
+  [
+    "src/lionlock/logging/sql_init.py",
+    "E501",
+    "Line too long (103 > 100)"
+  ],
+  [
+    "src/lionlock/logging/sql_telemetry.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "src/lionlock/logging/token_auth.py",
+    "E501",
+    "Line too long (105 > 100)"
+  ],
+  [
+    "src/lionlock/logging/token_auth.py",
+    "F401",
+    "`typing.Optional` imported but unused"
+  ],
+  [
+    "src/lionlock/replay/cli.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "src/lionlock/replay/evaluation_labels.py",
+    "F401",
+    "`typing.Iterable` imported but unused"
+  ],
+  [
+    "src/lionlock/replay/evaluation_labels.py",
+    "F401",
+    "`typing.Tuple` imported but unused"
+  ],
+  [
+    "src/lionlock/replay/evaluation_labels.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "src/lionlock/replay/replay_engine.py",
+    "E501",
+    "Line too long (102 > 100)"
+  ],
+  [
+    "src/lionlock/replay/replay_engine.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "src/lionlock/replay/sql_reader.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "E501",
+    "Line too long (101 > 100)"
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "E501",
+    "Line too long (105 > 100)"
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "E501",
+    "Line too long (105 > 100)"
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "E501",
+    "Line too long (106 > 100)"
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "E501",
+    "Line too long (107 > 100)"
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "E501",
+    "Line too long (107 > 100)"
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "E501",
+    "Line too long (111 > 100)"
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "E501",
+    "Line too long (132 > 100)"
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "src/lionlock/sim/labels.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "src/lionlock/sim/profiles.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "src/lionlock/sim/reporting.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "src/lionlock/sim/runner.py",
+    "E501",
+    "Line too long (102 > 100)"
+  ],
+  [
+    "src/lionlock/sim/runner.py",
+    "E501",
+    "Line too long (102 > 100)"
+  ],
+  [
+    "src/lionlock/sim/runner.py",
+    "E501",
+    "Line too long (106 > 100)"
+  ],
+  [
+    "src/lionlock/sim/runner.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "tests/test_anomaly_module_03.py",
+    "E501",
+    "Line too long (103 > 100)"
+  ],
+  [
+    "tests/test_anomaly_module_03.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "tests/test_gating_config_override.py",
+    "F401",
+    "`os` imported but unused"
+  ],
+  [
+    "tests/test_gating_config_override.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "tests/test_sql_module05_events_insert.py",
+    "I001",
+    "Import block is un-sorted or un-formatted"
+  ],
+  [
+    "tests/test_sql_module4_init_and_leakage.py",
+    "E501",
+    "Line too long (101 > 100)"
+  ],
+  [
+    "tests/test_sql_module4_init_and_leakage.py",
+    "E501",
+    "Line too long (105 > 100)"
+  ],
+  [
+    "tests/test_sql_module4_init_and_leakage.py",
+    "E501",
+    "Line too long (106 > 100)"
+  ],
+  [
+    "tests/test_sql_module4_init_and_leakage.py",
+    "E501",
+    "Line too long (108 > 100)"
+  ],
+  [
+    "tests/test_token_auth.py",
+    "E501",
+    "Line too long (102 > 100)"
+  ]
+]

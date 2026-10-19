@@ -1,0 +1,119 @@
+{
+  "description": "17 synthetic payloads. No real prompts, responses or data of any kind: every text here was written for this spec. Seven texts cover the range of raw-signal behaviour; nine metadata variants cover every combination of present and absent fatigue inputs. Texts 1-7 appear with no metadata at all, which is what every caller in this repo does today; the remaining ten pair a text with a metadata variant.",
+  "payloads": [
+    {
+      "id": "01-perfect-no-metadata",
+      "prompt": "alpha beta gamma delta epsilon",
+      "response": "alpha beta gamma delta epsilon zeta.",
+      "metadata": null
+    },
+    {
+      "id": "02-france-no-metadata",
+      "prompt": "What is the capital of France?",
+      "response": "The capital of France is Paris.",
+      "metadata": null
+    },
+    {
+      "id": "03-hash-no-metadata",
+      "prompt": "Explain what a hash function does.",
+      "response": "A hash function maps an input of any length to a fixed-length digest, and the same input always produces the same digest.",
+      "metadata": null
+    },
+    {
+      "id": "04-loop-no-metadata",
+      "prompt": "Summarise the maintenance policy.",
+      "response": "The policy requires quarterly inspection. The policy requires quarterly inspection. The policy requires quarterly inspection. The policy requires quarterly inspection. The policy requires quarterly inspection. The policy requires quarterly inspection.",
+      "metadata": null
+    },
+    {
+      "id": "05-fragments-no-metadata",
+      "prompt": "List the steps.",
+      "response": "Step one. Step two. Yes. No. Maybe.",
+      "metadata": null
+    },
+    {
+      "id": "06-fabrication-no-metadata",
+      "prompt": "What is the capital of France?",
+      "response": "Quantum tunnelling in photosynthetic complexes was first measured with femtosecond spectroscopy, and the effect accounts for the efficiency of light harvesting in low illumination.",
+      "metadata": null
+    },
+    {
+      "id": "07-runon-no-metadata",
+      "prompt": "Describe the inspection process.",
+      "response": "The inspector arrives and checks the seals and then the gauges and then the logbook and then the housing and then the couplings and then signs the register and then files the report and then notifies the duty engineer who reviews it and countersigns it before the record is archived",
+      "metadata": null
+    },
+    {
+      "id": "08-perfect-fatigue-max",
+      "prompt": "alpha beta gamma delta epsilon",
+      "response": "alpha beta gamma delta epsilon zeta.",
+      "metadata": { "entropy_decay": 1.0, "drift_slope": 1.0, "turn_index": 60 }
+    },
+    {
+      "id": "09-france-fatigue-mid",
+      "prompt": "What is the capital of France?",
+      "response": "The capital of France is Paris.",
+      "metadata": { "entropy_decay": 0.5, "drift_slope": 0.5, "turn_index": 12 }
+    },
+    {
+      "id": "10-hash-fatigue-zero",
+      "prompt": "Explain what a hash function does.",
+      "response": "A hash function maps an input of any length to a fixed-length digest, and the same input always produces the same digest.",
+      "metadata": { "entropy_decay": 0.0, "drift_slope": 0.0, "turn_index": 0 }
+    },
+    {
+      "id": "11-loop-turn-index-only",
+      "prompt": "Summarise the maintenance policy.",
+      "response": "The policy requires quarterly inspection. The policy requires quarterly inspection. The policy requires quarterly inspection. The policy requires quarterly inspection. The policy requires quarterly inspection. The policy requires quarterly inspection.",
+      "metadata": { "turn_index": 7 }
+    },
+    {
+      "id": "12-fragments-entropy-and-drift",
+      "prompt": "List the steps.",
+      "response": "Step one. Step two. Yes. No. Maybe.",
+      "metadata": { "entropy_decay": 0.8, "drift_slope": 0.3 }
+    },
+    {
+      "id": "13-fabrication-entropy-and-turn",
+      "prompt": "What is the capital of France?",
+      "response": "Quantum tunnelling in photosynthetic complexes was first measured with femtosecond spectroscopy, and the effect accounts for the efficiency of light harvesting in low illumination.",
+      "metadata": { "entropy_decay": 0.8, "turn_index": 30 }
+    },
+    {
+      "id": "14-runon-latency-only",
+      "prompt": "Describe the inspection process.",
+      "response": "The inspector arrives and checks the seals and then the gauges and then the logbook and then the housing and then the couplings and then signs the register and then files the report and then notifies the duty engineer who reviews it and countersigns it before the record is archived",
+      "metadata": { "duration_ms": 180.0, "latency_window_stats": [90.0, 140.0, 210.0] }
+    },
+    {
+      "id": "15-perfect-every-input",
+      "prompt": "alpha beta gamma delta epsilon",
+      "response": "alpha beta gamma delta epsilon zeta.",
+      "metadata": {
+        "entropy_decay": 0.9,
+        "drift_slope": 0.7,
+        "turn_index": 40,
+        "duration_ms": 250.0,
+        "latency_window_stats": [80.0, 300.0, 120.0]
+      }
+    },
+    {
+      "id": "16-loop-fatigue-max",
+      "prompt": "Summarise the maintenance policy.",
+      "response": "The policy requires quarterly inspection. The policy requires quarterly inspection. The policy requires quarterly inspection. The policy requires quarterly inspection. The policy requires quarterly inspection. The policy requires quarterly inspection.",
+      "metadata": { "entropy_decay": 1.0, "drift_slope": 1.0, "turn_index": 60 }
+    },
+    {
+      "id": "17-fabrication-every-input",
+      "prompt": "What is the capital of France?",
+      "response": "Quantum tunnelling in photosynthetic complexes was first measured with femtosecond spectroscopy, and the effect accounts for the efficiency of light harvesting in low illumination.",
+      "metadata": {
+        "entropy_decay": 0.9,
+        "drift_slope": 0.7,
+        "turn_index": 40,
+        "duration_ms": 250.0,
+        "latency_window_stats": [80.0, 300.0, 120.0]
+      }
+    }
+  ]
+}
