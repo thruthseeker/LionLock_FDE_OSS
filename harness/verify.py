@@ -15,6 +15,7 @@ import subprocess
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -336,7 +337,7 @@ def collect_mypy() -> list[list[str]]:
             # by file path, never imported as packages. Without this mypy aborts with "Duplicate
             # module named product" and checks nothing at all.
             "--exclude",
-            "harness/specs",
+            "^harness/specs/",
             "--no-error-summary",
             "--show-error-codes",
             "--no-pretty",
@@ -536,8 +537,17 @@ def product_text(spec: Spec) -> str:
 # --------------------------------------------------------------------------------------- 7 and 8
 
 
-def _contract_base_commit() -> tuple[str, str]:
-    """The commit that last touched the contract lock; the scope and privacy diffs start there."""
+def _contract_base_commit(changed_since: str | None = None) -> tuple[str, str]:
+    """Where the scope and privacy diffs start.
+
+    With ``changed_since`` (CI) it is the merge-base, so the diffs cover exactly the change under
+    review and never commits that landed on the base branch since. Without it (local runs) it is the
+    commit that last touched the contract lock.
+    """
+    if changed_since:
+        sha = _git("merge-base", changed_since, "HEAD")
+        if sha:
+            return sha, f"merge-base with {changed_since}"
     sha = _git("log", "-1", "--format=%H", "--", str(CONTRACT_LOCK.relative_to(REPO_ROOT)))
     if sha:
         return sha, "last commit touching the contract lock"
@@ -558,18 +568,31 @@ def _changed_paths(base: str) -> tuple[str, ...]:
     return tuple(sorted(path for path in changed if path))
 
 
+def _glob_matches(path: str, pattern: str) -> bool:
+    """Whole-path glob match where ``*`` never crosses a ``/``.
+
+    ``Path.match`` anchors relative patterns on the right, so ``tests/test_*.py`` would also match
+    ``anything/tests/test_x.py``; plain ``fnmatch`` lets ``*`` span directories. Matching component
+    by component avoids both.
+    """
+    parts = path.split("/")
+    pattern_parts = pattern.split("/")
+    return len(parts) == len(pattern_parts) and all(
+        fnmatchcase(part, glob) for part, glob in zip(parts, pattern_parts, strict=True)
+    )
+
+
 def _within_allowed(path: str, allowed: Iterable[str]) -> bool:
-    candidate = Path(path)
     for pattern in allowed:
-        if path == pattern or candidate.match(pattern):
+        if path == pattern or _glob_matches(path, pattern):
             return True
         if pattern.endswith("/") and path.startswith(pattern):
             return True
     return False
 
 
-def check_scope(spec: Spec) -> CheckResult:
-    base, origin = _contract_base_commit()
+def check_scope(spec: Spec, changed_since: str | None = None) -> CheckResult:
+    base, origin = _contract_base_commit(changed_since)
     if not base:
         return CheckResult(f"scope:{spec.spec_id}", SKIP, "not a git checkout")
     changed = _changed_paths(base)
@@ -592,9 +615,9 @@ def check_scope(spec: Spec) -> CheckResult:
     )
 
 
-def check_privacy() -> CheckResult:
+def check_privacy(changed_since: str | None = None) -> CheckResult:
     """Scan added lines for things a public repo must not carry. Locations only, never the text."""
-    base, origin = _contract_base_commit()
+    base, origin = _contract_base_commit(changed_since)
     if not base:
         return CheckResult("privacy", SKIP, "not a git checkout")
 
@@ -695,10 +718,10 @@ def verify(spec_id: str | None = None, *, changed_since: str | None = None) -> i
         results.append(check_acceptance(spec, selected=selected))
         results.append(check_determinism(spec, selected=selected))
 
-    results.append(check_privacy())
+    results.append(check_privacy(changed_since))
     for spec in specs:
         if spec.spec_id in selected_ids:
-            results.append(check_scope(spec))
+            results.append(check_scope(spec, changed_since))
 
     failed = [item for item in results if item.failed]
     overall = FAIL if failed else PASS

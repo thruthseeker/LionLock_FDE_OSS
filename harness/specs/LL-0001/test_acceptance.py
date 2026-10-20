@@ -198,5 +198,10 @@ def test_r6_product_matches_the_golden_exactly(
 
 
 def test_r7_telemetry_doc_has_an_se_0_4_0_replay_note() -> None:
-    text = (REPO_ROOT / "docs" / "TELEMETRY.md").read_text()
+    # Whitespace is normalised so the note may wrap anywhere.
+    text = " ".join((REPO_ROOT / "docs" / "TELEMETRY.md").read_text().split())
     assert "SE-0.4.0" in text
+    assert "Every derived value it produces is identical to `SE-0.3.0`" in text
+    assert (
+        "The only difference is that `fatigue_risk_index` no longer participates in gating" in text
+    )

@@ -1,5 +1,5 @@
 {
-  "description": "17 synthetic payloads. No real prompts, responses or data of any kind: every text here was written for this spec. Seven texts cover the range of raw-signal behaviour; nine metadata variants cover every combination of present and absent fatigue inputs. Texts 1-7 appear with no metadata at all, which is what every caller in this repo does today; the remaining ten pair a text with a metadata variant.",
+  "description": "17 synthetic payloads. No real prompts, responses or data of any kind: every text here was written for this spec. Seven texts cover the range of raw-signal behaviour. Texts 1-7 appear with no metadata at all, which is what every caller in this repo does today; the remaining ten pair a text with metadata covering five of the eight combinations of the three fatigue inputs: all present, none present (latency only), turn_index only, entropy_decay with drift_slope, and entropy_decay with turn_index.",
   "payloads": [
     {
       "id": "01-perfect-no-metadata",
