@@ -74,3 +74,6 @@ context/
 
 # Simulation outputs (Module 07)
 sim_out/
+
+# Harness
+harness/out/

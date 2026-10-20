@@ -1,0 +1,92 @@
+[
+  [
+    "docs/SECURITY.md",
+    "format",
+    "would reformat"
+  ],
+  [
+    "src/lionlock/anomaly/detector.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "src/lionlock/config.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "src/lionlock/logging/anomaly_sql.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "src/lionlock/logging/connection.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "src/lionlock/logging/events_sql.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "src/lionlock/logging/missed_signal_sql.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "src/lionlock/logging/sql_init.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "src/lionlock/logging/sql_telemetry.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "src/lionlock/logging/token_auth.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "src/lionlock/replay/replay_engine.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "src/lionlock/signal_schemas.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "src/lionlock/sim/reporting.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "src/lionlock/sim/runner.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "tests/test_anomaly_module_03.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "tests/test_module05_vocabulary.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "tests/test_sql_module4_init_and_leakage.py",
+    "format",
+    "would reformat"
+  ],
+  [
+    "tests/test_token_auth.py",
+    "format",
+    "would reformat"
+  ]
+]

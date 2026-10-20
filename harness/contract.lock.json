@@ -1,0 +1,28 @@
+{
+  "files": {
+    ".devcontainer/devcontainer.json": "5ff0139e904a6a7e29c6167eafe9cbcd8ae492c0ac2f56fad3dc74dd112d5dcf",
+    ".github/workflows/verify.yml": "7d4a981136d45f246adbb5664fda34d2395cc74b4ffe004da5235db46eb8e216",
+    ".python-version": "7b55f8e67b5623c4bef3fa691288da9437d79d3aba156de48d481db32ac7d16d",
+    "AGENTS.md": "fd6facdf9cbfd1c14893dbbb51e70bbd7a2a57a1eb855b707de54b5f135cc7f2",
+    "GEMINI.md": "9f043aeed003a80df8aa9fc7890d0bbcc9ced27f8dfec2a5f5940e21ff9615b9",
+    "Makefile": "87d0e9143b0a79588e9f5e045446f861cbd989c593eeb96f9e4a8ea97a3e254a",
+    "harness/README.md": "2ceda7a9366d65dacdf22d46c85afe624d1f228eff2fa1d760f9813a79791e74",
+    "harness/__init__.py": "f90b9dd8d8de4f9cc5302e69d4c94913206edb81b7600486863b4d5bd427a610",
+    "harness/__main__.py": "92cdc35637c3044f7bd992cec3ee83a9170e4b5341152c449b57b5de9968b48d",
+    "harness/baseline/format.json": "453798bf433db2c3c164fc2c528f3501f02074c1a5da82f1fc8bfbd788623fc2",
+    "harness/baseline/mypy.json": "8319098cb2363ad37730160202a6d3347eae20285d8f06e5b115e5c4fdfda3da",
+    "harness/baseline/ruff.json": "a54f3fbeec9309587f180f7b17875feec3bb4a84bc15f96a67a982b4553576c1",
+    "harness/env/requirements.in": "ef38efba513cfe1228eba45e00edd2e675d7261cd499091ba9da3e1a776ead67",
+    "harness/env/requirements.lock": "1469f2e2f46271dfe7149f49c0151e634c3cef6c3ff2c9fba7eea329f6edbfcc",
+    "harness/fingerprint.py": "053d03beac36659a60f2145dd0ac7697201ee43a9f52bc6b0c65b0377c2dc2e6",
+    "harness/specs.py": "a344770a80c86cb30f4be9b4f9df3eb0082f687f4f09d6d22fe3606f97de911d",
+    "harness/specs/LL-0001/SPEC.md": "600aa23ee83f922cc056d9d0bcb6f17dfaf57853c4940a3ea47d99c7b5d3ef7b",
+    "harness/specs/LL-0001/corpus.json": "9c29f05a427dc3f5dc93a04ffed54ea9a0369317afce581e958d0cf3242f14e6",
+    "harness/specs/LL-0001/golden.json": "56c1acf4903df85412af2f9301de9e42e76141002dbd28721ac1e103785f5085",
+    "harness/specs/LL-0001/oracle.py": "93b9edbdb822523b28a1d8631e13ce4c0a4a43a2d562cf94766f11e0e30341dc",
+    "harness/specs/LL-0001/product.py": "3527a030d5f1787c689eaa3dbe470e5464a0a14f804099eb7a2618bb911b1bbd",
+    "harness/specs/LL-0001/test_acceptance.py": "01d326ee8049282ee41f4b7320fec325deddd225888d534f58f7d01027711c0b",
+    "harness/specs/TEMPLATE.md": "c21fd2d7a33fb01826d6b1ee08262d2e961d4790619e42bcf7d6f20bb649b981",
+    "harness/verify.py": "9382009803b106447f057361793e16bce456021de31d124eeab7b1e66dbb4ee0"
+  }
+}
