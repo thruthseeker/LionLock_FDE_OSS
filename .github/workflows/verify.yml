@@ -16,8 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The scope and privacy checks diff against the commit that last touched the contract
-          # lock, so the full history has to be present.
+          # The scope and privacy checks diff against the merge-base with the base branch (or, on a
+          # push, the commit that last touched the contract lock), so the full history has to be
+          # present.
           fetch-depth: 0
           persist-credentials: false
 
