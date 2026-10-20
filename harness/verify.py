@@ -421,13 +421,20 @@ def check_ratchet() -> list[CheckResult]:
 
 def check_tests() -> CheckResult:
     result = _run(
-        [sys.executable, "-m", "pytest", "-o", "addopts=", "-p", "no:cacheprovider", "-q"]
+        [sys.executable, "-m", "pytest", "-o", "addopts=", "-p", "no:cacheprovider", "-q", "-rfE"]
     )
-    tail = [line for line in result.stdout.strip().splitlines() if line.strip()]
-    summary = tail[-1] if tail else "no output"
-    data = {"returncode": result.returncode, "summary": summary}
+    lines = [line for line in result.stdout.strip().splitlines() if line.strip()]
+    summary = lines[-1] if lines else "no output"
+    # Test ids only, from pytest's short summary; enough to find the failure without the full log.
+    failing = [
+        line.split(" - ")[0].split(" ", 1)[1]
+        for line in lines
+        if line.startswith(("FAILED ", "ERROR ")) and " " in line
+    ]
+    data = {"returncode": result.returncode, "summary": summary, "failing": failing}
     if result.returncode != 0:
-        return CheckResult("tests", FAIL, summary, data)
+        detail = summary + (": " + ", ".join(failing[:3]) if failing else "")
+        return CheckResult("tests", FAIL, detail, data)
     return CheckResult("tests", PASS, summary, data)
 
 

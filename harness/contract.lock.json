@@ -23,6 +23,6 @@
     "harness/specs/LL-0001/product.py": "3527a030d5f1787c689eaa3dbe470e5464a0a14f804099eb7a2618bb911b1bbd",
     "harness/specs/LL-0001/test_acceptance.py": "01d326ee8049282ee41f4b7320fec325deddd225888d534f58f7d01027711c0b",
     "harness/specs/TEMPLATE.md": "c21fd2d7a33fb01826d6b1ee08262d2e961d4790619e42bcf7d6f20bb649b981",
-    "harness/verify.py": "b08ff04f8fef015038782b4a15a644a0fd2c99c2ab31073a4d5b05b7e7d4efcc"
+    "harness/verify.py": "9382009803b106447f057361793e16bce456021de31d124eeab7b1e66dbb4ee0"
   }
 }
