@@ -70,11 +70,6 @@
     "would reformat"
   ],
   [
-    "src/lionlock/trust_overlay/sql_sink.py",
-    "format",
-    "would reformat"
-  ],
-  [
     "tests/test_anomaly_module_03.py",
     "format",
     "would reformat"

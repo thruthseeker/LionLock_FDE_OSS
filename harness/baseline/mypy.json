@@ -91,21 +91,6 @@
   ],
   [
     "src/lionlock/logging/sql_telemetry.py",
-    "assignment",
-    "Incompatible types in assignment (expression has type \"None\", variable has type \"str\")"
-  ],
-  [
-    "src/lionlock/logging/sql_telemetry.py",
-    "attr-defined",
-    "\"None\" has no attribute \"error\""
-  ],
-  [
-    "src/lionlock/logging/sql_telemetry.py",
-    "no-redef",
-    "Attribute \"error\" already defined on line 369"
-  ],
-  [
-    "src/lionlock/logging/sql_telemetry.py",
     "unused-ignore",
     "Unused \"type: ignore\" comment"
   ],

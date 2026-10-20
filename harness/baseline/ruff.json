@@ -75,11 +75,6 @@
     "Line too long (103 > 100)"
   ],
   [
-    "src/lionlock/logging/sql_telemetry.py",
-    "I001",
-    "Import block is un-sorted or un-formatted"
-  ],
-  [
     "src/lionlock/logging/token_auth.py",
     "E501",
     "Line too long (105 > 100)"

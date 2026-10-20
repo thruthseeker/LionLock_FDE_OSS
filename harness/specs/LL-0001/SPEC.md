@@ -1,7 +1,7 @@
 +++
 id = "LL-0001"
 title = "Withhold the uncalibrated fatigue_risk_index from the gating channel (SE-0.4.0)"
-status = "open"
+status = "done"
 tier = "public"
 allowed_paths = [
   "src/lionlock/core/scoring.py",
