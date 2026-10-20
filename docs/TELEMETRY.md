@@ -78,6 +78,9 @@ token_path = ""
 interval_hours = 24
 ```
 
+`enabled` switches uploads on only when it is `true`, or a string such as `"true"`, `"yes"` or
+`"on"`. Anything else, including `"false"`, `"off"`, a typo or a number, leaves uploads off.
+
 | Environment variable | Effect |
 |---|---|
 | `DO_NOT_TRACK=1` | Disables uploads, overriding every other setting |
@@ -241,8 +244,11 @@ lionlock-telemetry serve --data-dir /var/lib/lionlock-telemetry --token-hashes-f
 ```
 
 Clients set `token_path` (or `LIONLOCK_UPLOAD_TOKEN`). The receiver stores only hashes, so a
-leaked allowlist does not reveal any token. Without a token file, the receiver accepts anonymous
-uploads, rate-limited per install. A token file that lists no hashes (empty, or comments only) is
+leaked allowlist does not reveal any token. With tokens, the upload rate limit counts per token, so
+a client cannot reset it by changing its install id. Without a token file, the receiver accepts
+anonymous uploads, rate-limited per install id. The client chooses that id, so the anonymous limit
+slows a misbehaving client but cannot stop a deliberate one: **require tokens on any endpoint
+reachable from the internet.** A token file that lists no hashes (empty, or comments only) is
 refused at startup instead of being treated as anonymous mode.
 
 ### What the receiver checks
@@ -418,7 +424,7 @@ The command prints a JSON summary of the rows and jobs it loaded, and exits non-
 | A crafted SQLite file attacks the parser | Size caps, read-only defensive open, `quick_check`, schema check before any data is read; isolate the process |
 | A bearer token leaks in transit | HTTPS only (plain http only for loopback, never via a proxy), no redirects, token read from env or file and never logged; the server stores only hashes |
 | Re-identification through identifiers | Keyed HMAC pseudonyms that cannot be linked across installs; hour-level timestamps; coarse platform data; identity reset |
-| Poisoned or fake uploads | Optional tokens, per-install rate limits, segment chain status; treat community data as statistical |
+| Poisoned or fake uploads | Optional tokens, per-token rate limits (per-install, and bypassable, without tokens), segment chain status; treat community data as statistical |
 | Local log tampering | Per-table hash chains and `lionlock-telemetry verify` |
 | Receiver compromise | Data minimization limits what an attacker can obtain |
 
