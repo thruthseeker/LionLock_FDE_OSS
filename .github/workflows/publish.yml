@@ -71,4 +71,4 @@ jobs:
       - name: Publish to PyPI
         # pypa/gh-action-pypi-publish v1.14.3, pinned by commit rather than tag: this is the one
         # step that runs with upload rights, and a tag can be moved to point at other code.
-        uses: pypa/gh-action-pypi-publish@aef6c9b6e301dc803e1bc9133e9ce67ae9b0906b
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086
