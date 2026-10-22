@@ -20,9 +20,17 @@ So this file asserts behaviour rather than syntax.
 * The import audits run in a fresh, isolated interpreter and inspect what was really loaded,
   rather than what the source says it imports.
 
-What this does not prove: a C extension that calls ``connect(2)`` itself bypasses Python's
-``socket`` module and would not be recorded. The import audits are what cover that risk, by
-establishing that no such extension is loaded on the scoring path to begin with.
+What this does not prove, stated as an open gap rather than a covered one: a C extension that
+calls ``connect(2)`` itself bypasses Python's ``socket`` module, so the blocker never sees it and
+the recorder stays empty either way. Compiled extensions *are* loaded here —
+``pydantic_core._pydantic_core`` is a third-party binary, pulled in by the strict payload
+validation in ``lionlock.signal_schemas``, alongside several of CPython's own. The module-name
+audits cannot speak to them: both are membership tests over named sets, and ``pydantic_core``
+appears in neither, so it passes both while being exactly the kind of module the gap describes.
+What narrows the risk is the size of the surface rather than a proof — a runtime dependency list
+of pydantic plus tomli below 3.11, short enough to audit by hand — and
+``test_scoring_core_loads_no_unlisted_compiled_extension`` pins the set, so a new binary arriving
+on the scoring path fails a test instead of passing unnoticed.
 """
 
 import hashlib
@@ -106,6 +114,31 @@ CORE_ALLOWED_STDLIB = frozenset({"socket", "selectors", "urllib", "random", "uui
 # a TLS and HTTP client and SQLite are resident. Pinned so the surface cannot grow unnoticed. See
 # the module docstring: making this set smaller is the fix, and the subset check welcomes it.
 TELEMETRY_ALLOWED_STDLIB = CORE_ALLOWED_STDLIB | {"ssl", "http", "sqlite3"}
+
+# Compiled extension modules the scoring core may have resident. A C extension can call connect(2)
+# without going through Python's socket module, so ``network_blocked`` cannot see one. Pinning this
+# set is what makes that gap measured rather than assumed.
+#
+# All but one are CPython's own accelerators, and which of those appear depends on the interpreter:
+# 3.11 also loads _typing and _uuid, 3.13 loads _uuid, 3.12 neither. ``pydantic_core`` is the only
+# third-party binary, pulled in by the strict payload validation in lionlock.signal_schemas.
+#
+# A subset check, like the module allowlists above: a new extension fails, a disappearing one is a
+# smaller surface and must not fail a test.
+CORE_ALLOWED_EXTENSIONS = frozenset(
+    {
+        "_bz2",
+        "_contextvars",
+        "_decimal",
+        "_hashlib",
+        "_json",
+        "_lzma",
+        "_typing",
+        "_uuid",
+        "_zoneinfo",
+        "pydantic_core._pydantic_core",
+    }
+)
 
 DECISION_FIELDS = (
     "decision_risk_score",
@@ -233,11 +266,22 @@ import sys
 sys.path.insert(0, sys.argv[1])
 for name in sys.argv[2].split(","):
     importlib.import_module(name)
-print(json.dumps(sorted({module.split(".")[0] for module in sys.modules})))
+print(
+    json.dumps(
+        {
+            "modules": sorted({module.split(".")[0] for module in sys.modules}),
+            "extensions": sorted(
+                name
+                for name, module in sys.modules.items()
+                if (getattr(module, "__file__", None) or "").endswith((".so", ".pyd", ".dylib"))
+            ),
+        }
+    )
+)
 """
 
 
-def loaded_modules(*modules: str) -> frozenset[str]:
+def _audit(*modules: str) -> dict[str, list[str]]:
     result = subprocess.run(
         [sys.executable, "-I", "-c", _AUDIT_CHILD, str(SRC_DIR), ",".join(modules)],
         capture_output=True,
@@ -245,7 +289,17 @@ def loaded_modules(*modules: str) -> frozenset[str]:
         check=False,
     )
     assert result.returncode == 0, f"import audit failed: {result.stderr.strip()}"
-    return frozenset(json.loads(result.stdout))
+    parsed: dict[str, list[str]] = json.loads(result.stdout)
+    return parsed
+
+
+def loaded_modules(*modules: str) -> frozenset[str]:
+    return frozenset(_audit(*modules)["modules"])
+
+
+def loaded_extensions(*modules: str) -> frozenset[str]:
+    """Compiled extension modules resident after the import, by full dotted name."""
+    return frozenset(_audit(*modules)["extensions"])
 
 
 def test_network_blocker_records_and_raises() -> None:
@@ -301,6 +355,18 @@ def test_scoring_core_loads_no_unlisted_risky_stdlib() -> None:
         "telnetlib",
     }
     assert (loaded & risky) <= CORE_ALLOWED_STDLIB
+
+
+def test_scoring_core_loads_no_unlisted_compiled_extension() -> None:
+    """A new compiled binary on the scoring path fails here instead of passing unnoticed.
+
+    The module-name audits cannot catch one. They test membership of named sets, and a new
+    extension would be absent from both the denylist and the stdlib allowlist, so it would pass
+    them while being precisely what the socket blocker is blind to.
+    """
+    loaded = loaded_extensions("lionlock.core", "lionlock.signal_schemas")
+    unlisted = loaded - CORE_ALLOWED_EXTENSIONS
+    assert not unlisted, f"unlisted compiled extension on the scoring path: {sorted(unlisted)}"
 
 
 def test_telemetry_path_loads_no_ai_stack_and_no_new_network_surface() -> None:
