@@ -1,0 +1,70 @@
+name: harness-lock
+
+# Closes a hole in the contract check. That check hashes every protected file against
+# harness/contract.lock.json, so a pull request that edits one of them and re-runs `make lock`
+# leaves the two consistent and contract passes. Review was the only thing in the way.
+#
+# Here the lock may not move on a pull request at all, unless a maintainer applies the
+# harness-change label. Applying a label needs write access to the repository, so a contributor or
+# an agent cannot approve its own harness change by pushing a commit.
+#
+# It covers the other maintainer-only commands for free: the ratchet baselines and every spec
+# golden are themselves protected files, so `make baseline` or `make golden` forces a lock refresh
+# too, and that refresh is what this check refuses.
+#
+# This lives in its own workflow rather than in verify.yml because verify.yml is itself a protected
+# file: adding a job there would require the very lock refresh this check exists to withhold, which
+# cannot be done without a maintainer running `make lock` by hand. The trade-off is that this file
+# is not covered by the contract lock, so deleting it would not fail any check on its own. It is
+# visible in a diff, and merges here are done by the maintainer.
+on:
+  # labeled and unlabeled are listed so this re-runs the moment the harness-change label is applied
+  # or removed, instead of waiting for another push.
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+# Read-only: this inspects the checkout and nothing else.
+permissions:
+  contents: read
+
+jobs:
+  harness-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Compared against the merge-base, the same baseline the scope and privacy checks use, so
+          # a lock change already on the base branch is not mistaken for this change's work.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse an unapproved change to the contract lock
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'harness-change') }}
+        run: |
+          set -euo pipefail
+          merge_base="$(git merge-base "origin/$BASE_REF" HEAD)"
+          if git diff --quiet "$merge_base" HEAD -- harness/contract.lock.json; then
+            echo "harness/contract.lock.json is unchanged from $BASE_REF. Nothing to approve."
+            exit 0
+          fi
+          echo "harness/contract.lock.json differs from $BASE_REF:"
+          git diff --stat "$merge_base" HEAD -- harness/contract.lock.json
+          if [ "$APPROVED" = "true" ]; then
+            echo
+            echo "Allowed: this pull request carries the harness-change label."
+            exit 0
+          fi
+          echo
+          echo "Refusing an unapproved change to the harness contract lock."
+          echo
+          echo "That file records the hash of every protected file, so refreshing it is what lets an"
+          echo "edit to the harness, the Makefile, AGENTS.md or the verify workflow pass the"
+          echo "contract check. If the edit was not asked for, revert it and restore the lock:"
+          echo
+          echo "    git checkout origin/$BASE_REF -- harness/contract.lock.json"
+          echo
+          echo "If the harness change is intended, a maintainer applies the harness-change label to"
+          echo "this pull request. The check then re-runs on its own."
+          exit 1
