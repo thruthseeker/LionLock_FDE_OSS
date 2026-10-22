@@ -160,8 +160,9 @@
       </p>
       <ul class="ticks">
         <li>
-          The product is run <strong>twice in separate processes under different hash
-          seeds</strong>, and the two canonical outputs must match each other.
+          The decision output of the real pipeline, over a fixed corpus of 17 synthetic
+          payloads, is produced <strong>twice in separate processes</strong> and the two
+          results must be byte-identical.
         </li>
         <li>
           That output must also match a <strong>golden fingerprint committed before the
@@ -169,8 +170,17 @@
           decision independently rather than calling the library.
         </li>
         <li>
-          The runtime is held to <strong>no machine learning, no network access and no
-          randomness</strong> in scoring or gating.
+          "No AI in the decision" is enforced at the import level, not just promised. A test
+          parses each scoring, gating and export module and <strong>fails if it imports a
+          networking, remote-database or ML library</strong> &mdash; <code>torch</code>,
+          <code>openai</code>, <code>transformers</code>, <code>langchain</code> and the rest
+          &mdash; and a second test asserts the runtime dependencies name none of them either.
+          So a later change cannot quietly reintroduce one.
+        </li>
+        <li>
+          The two runs use <strong>different hash seeds</strong>
+          (<code>PYTHONHASHSEED</code> 0 and 4242), so any accidental dependence on
+          dictionary or set ordering shows up as a mismatch.
         </li>
         <li>
           Lint and type findings are <strong>ratcheted</strong>: pre-existing ones are
