@@ -29,8 +29,8 @@ audits cannot speak to them: both are membership tests over named sets, and ``py
 appears in neither, so it passes both while being exactly the kind of module the gap describes.
 What narrows the risk is the size of the surface rather than a proof — a runtime dependency list
 of pydantic plus tomli below 3.11, short enough to audit by hand — and
-``test_scoring_core_loads_no_unlisted_compiled_extension`` pins the set, so a new binary arriving
-on the scoring path fails a test instead of passing unnoticed.
+``test_scoring_core_loads_no_unlisted_third_party_extension`` pins the third-party binaries, so a
+new one arriving on the scoring path fails a test instead of passing unnoticed.
 """
 
 import hashlib
@@ -115,30 +115,24 @@ CORE_ALLOWED_STDLIB = frozenset({"socket", "selectors", "urllib", "random", "uui
 # the module docstring: making this set smaller is the fix, and the subset check welcomes it.
 TELEMETRY_ALLOWED_STDLIB = CORE_ALLOWED_STDLIB | {"ssl", "http", "sqlite3"}
 
-# Compiled extension modules the scoring core may have resident. A C extension can call connect(2)
-# without going through Python's socket module, so ``network_blocked`` cannot see one. Pinning this
-# set is what makes that gap measured rather than assumed.
+# Third-party compiled extensions the scoring core may have resident. A C extension can call
+# connect(2) without going through Python's socket module, so ``network_blocked`` cannot see one.
+# Pinning this set is what makes that gap measured rather than assumed.
 #
-# All but one are CPython's own accelerators, and which of those appear depends on the interpreter:
-# 3.11 also loads _typing and _uuid, 3.13 loads _uuid, 3.12 neither. ``pydantic_core`` is the only
-# third-party binary, pulled in by the strict payload validation in lionlock.signal_schemas.
+# Scoped to third-party binaries deliberately. Whether a standard-library module is a compiled
+# extension or built into the interpreter depends on how that interpreter was compiled: this
+# repository's CI build loads a different set from a Debian system Python, so listing CPython's own
+# accelerators tracks the build rather than the dependency surface. A first version of this test did
+# list them and passed on three local interpreters before failing in CI for exactly that reason.
 #
-# A subset check, like the module allowlists above: a new extension fails, a disappearing one is a
-# smaller surface and must not fail a test.
-CORE_ALLOWED_EXTENSIONS = frozenset(
-    {
-        "_bz2",
-        "_contextvars",
-        "_decimal",
-        "_hashlib",
-        "_json",
-        "_lzma",
-        "_typing",
-        "_uuid",
-        "_zoneinfo",
-        "pydantic_core._pydantic_core",
-    }
-)
+# The exclusion is not free, and the honest version of it is this: ``_socket`` is itself one of
+# CPython's extensions, and it is what the patched ``socket`` module sits on top of, so this check
+# would not see code reaching it directly. What it does cover is the binaries that arrive with a
+# dependency rather than with the interpreter, which is where an unaudited one would come from.
+#
+# ``pydantic_core`` is the only one, pulled in by the strict payload validation in
+# lionlock.signal_schemas. A subset check, like the module allowlists above.
+CORE_ALLOWED_THIRD_PARTY_EXTENSIONS = frozenset({"pydantic_core._pydantic_core"})
 
 DECISION_FIELDS = (
     "decision_risk_score",
@@ -262,6 +256,7 @@ _AUDIT_CHILD = """
 import importlib
 import json
 import sys
+import sysconfig
 
 sys.path.insert(0, sys.argv[1])
 for name in sys.argv[2].split(","):
@@ -270,10 +265,11 @@ print(
     json.dumps(
         {
             "modules": sorted({module.split(".")[0] for module in sys.modules}),
-            "extensions": sorted(
+            "third_party_extensions": sorted(
                 name
                 for name, module in sys.modules.items()
                 if (getattr(module, "__file__", None) or "").endswith((".so", ".pyd", ".dylib"))
+                and not module.__file__.startswith(sysconfig.get_paths()["stdlib"])
             ),
         }
     )
@@ -297,9 +293,9 @@ def loaded_modules(*modules: str) -> frozenset[str]:
     return frozenset(_audit(*modules)["modules"])
 
 
-def loaded_extensions(*modules: str) -> frozenset[str]:
-    """Compiled extension modules resident after the import, by full dotted name."""
-    return frozenset(_audit(*modules)["extensions"])
+def loaded_third_party_extensions(*modules: str) -> frozenset[str]:
+    """Compiled extensions resident after the import that live outside the standard library."""
+    return frozenset(_audit(*modules)["third_party_extensions"])
 
 
 def test_network_blocker_records_and_raises() -> None:
@@ -357,16 +353,16 @@ def test_scoring_core_loads_no_unlisted_risky_stdlib() -> None:
     assert (loaded & risky) <= CORE_ALLOWED_STDLIB
 
 
-def test_scoring_core_loads_no_unlisted_compiled_extension() -> None:
-    """A new compiled binary on the scoring path fails here instead of passing unnoticed.
+def test_scoring_core_loads_no_unlisted_third_party_extension() -> None:
+    """A new third-party binary on the scoring path fails here instead of passing unnoticed.
 
     The module-name audits cannot catch one. They test membership of named sets, and a new
     extension would be absent from both the denylist and the stdlib allowlist, so it would pass
     them while being precisely what the socket blocker is blind to.
     """
-    loaded = loaded_extensions("lionlock.core", "lionlock.signal_schemas")
-    unlisted = loaded - CORE_ALLOWED_EXTENSIONS
-    assert not unlisted, f"unlisted compiled extension on the scoring path: {sorted(unlisted)}"
+    loaded = loaded_third_party_extensions("lionlock.core", "lionlock.signal_schemas")
+    unlisted = loaded - CORE_ALLOWED_THIRD_PARTY_EXTENSIONS
+    assert not unlisted, f"unlisted third-party extension on the scoring path: {sorted(unlisted)}"
 
 
 def test_telemetry_path_loads_no_ai_stack_and_no_new_network_surface() -> None:
