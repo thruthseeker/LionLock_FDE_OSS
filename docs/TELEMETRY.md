@@ -139,7 +139,7 @@ otherwise (including rejected or invalid snapshots), and 2 when uploads are disa
 | `install_id` | Random 128-bit ID, created on first export; rotate with `reset-identity` |
 | `segment_index`, `prev_segment_digest` | Segment counter and the digest of the previous segment |
 | `content_digest` | SHA-256 over the canonical content of this snapshot |
-| `lionlock_version` | A published LionLock release (currently `0.1.0` or `1.0.0b1`); anything else, including private or development build numbers, becomes `unknown` |
+| `lionlock_version` | A published LionLock release (currently `0.1.0`, `1.0.0b1` or `1.0.0b2`); anything else, including private or development build numbers, becomes `unknown` |
 | `python` | Major.minor only, for example `3.11` |
 | `platform` | `linux`, `macos`, `windows`, `freebsd`, or `other` |
 | `<table>_rows`, `<table>_pruned_before_export` | Row counts and rows lost to local pruning |
@@ -217,7 +217,7 @@ The reference receiver uses only the Python standard library. Install a publishe
 PyPI:
 
 ```bash
-pip install lionlock==1.0.0b1
+pip install lionlock==1.0.0b2
 lionlock-telemetry serve --data-dir /var/lib/lionlock-telemetry --host 127.0.0.1 --port 8787
 ```
 

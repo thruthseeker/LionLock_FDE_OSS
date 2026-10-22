@@ -66,9 +66,9 @@ SIGNAL_SCHEMA_VERSIONS = ("SE-0.2.0", "SE-0.3.0", "SE-0.4.0")
 TRUST_LOGIC_VERSIONS = ("TO-0.1.0",)
 RUNTIME_MODES = ("oss",)
 # Published lionlock package versions: the values pyproject.toml has declared for a release
-# (0.1.0, then 1.0.0b1, the first public beta). A new release is added here in a reviewed change,
-# never from logs, the environment or a received value.
-PACKAGE_VERSIONS = ("0.1.0", "1.0.0b1")
+# (0.1.0, then 1.0.0b1 and 1.0.0b2, the public betas). A new release is added here in a reviewed
+# change, never from logs, the environment or a received value.
+PACKAGE_VERSIONS = ("0.1.0", "1.0.0b1", "1.0.0b2")
 UNKNOWN_VERSION = "unknown"
 
 MAX_DURATION_MS = 86_400_000

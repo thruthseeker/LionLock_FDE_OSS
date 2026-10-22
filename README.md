@@ -1,8 +1,8 @@
-# LionLock FDE – Public Beta (1.0.0b1)
+# LionLock FDE – Public Beta (1.0.0b2)
 
 **LionLock_FDE** scores LLM replies with fixed, deterministic rules and turns those scores into a gate decision. It also provides a tamper-evident local log to record those decisions in.
 
-No AI model is involved in scoring or deciding: the same input always gives the same output. This is the **first public beta** of open-source LionLock (version `1.0.0b1`), suitable for developers, researchers, and AI safety teams. Interfaces may change before 1.0.0. No premium modules or proprietary datasets are included.
+No AI model is involved in scoring or deciding: the same input always gives the same output. This is a **public beta** of open-source LionLock (version `1.0.0b2`), suitable for developers, researchers, and AI safety teams. Interfaces may change before 1.0.0. No premium modules or proprietary datasets are included.
 
 ---
 
@@ -46,7 +46,7 @@ Stress-tests policies across multiple profiles and gating thresholds.
 Install the library and the `lionlock-telemetry` and `lionlock-sim` commands from PyPI:
 
 ```bash
-pip install lionlock==1.0.0b1
+pip install lionlock==1.0.0b2
 ```
 
 ```python

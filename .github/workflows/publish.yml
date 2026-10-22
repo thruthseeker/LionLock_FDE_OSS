@@ -1,0 +1,74 @@
+name: publish
+
+# Releases reach PyPI through Trusted Publishing: GitHub mints a short-lived OIDC token for this
+# workflow and PyPI exchanges it for upload rights on this project alone. No API token is stored
+# in the repository, in a secret or on a maintainer's machine.
+on:
+  release:
+    types: [published]
+
+# Nothing here writes to the repository. The one extra right needed, id-token, is granted to the
+# publish job only, so the build cannot mint a token.
+permissions:
+  contents: read
+
+jobs:
+  # Build first, in an unprotected job, so the artifact a reviewer approves is the artifact that
+  # gets uploaded. Building after approval would mean approving something that does not exist yet.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      # The sdist and wheel take their version from pyproject.toml, not from the tag. If the two
+      # disagree, publishing would put something other than the announced release on PyPI, under a
+      # version number nobody reviewed. Tags follow v<version>, as v1.0.0b1 did.
+      - name: Check the release tag matches the declared version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          declared="$(python -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
+          echo "release tag: $TAG"
+          echo "pyproject version: $declared"
+          if [ "$TAG" != "v$declared" ]; then
+            echo "::error::tag $TAG does not match pyproject version $declared (expected v$declared)"
+            exit 1
+          fi
+
+      - name: Build the sdist and wheel
+        run: |
+          python -m pip install --quiet build==1.6.1
+          python -m build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # The gate. This environment carries a required reviewer, so the run pauses here until a
+    # maintainer approves it: nothing reaches PyPI unattended, even if a release is published by
+    # accident.
+    environment: pypi
+    permissions:
+      # Trusted Publishing needs to mint an OIDC token, and needs nothing else.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        # pypa/gh-action-pypi-publish v1.14.3, pinned by commit rather than tag: this is the one
+        # step that runs with upload rights, and a tag can be moved to point at other code.
+        uses: pypa/gh-action-pypi-publish@aef6c9b6e301dc803e1bc9133e9ce67ae9b0906b
