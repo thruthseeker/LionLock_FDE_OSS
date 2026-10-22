@@ -190,9 +190,14 @@
           test demands the recorder stayed empty <em>and</em> that the product is identical to
           the unblocked run. The empty recorder is the proof; the unchanged product is what
           rules out a quietly swallowed fallback. The blocker is itself tested, so it cannot
-          pass for the wrong reason. The one gap is stated too: a C extension calling
-          <code>connect(2)</code> directly would bypass Python's <code>socket</code> module,
-          which is what the import audits cover by establishing none is loaded.
+          pass for the wrong reason. One gap stays open, and this page would rather name it
+          than imply it is closed: a compiled extension calling <code>connect(2)</code> itself
+          would bypass Python's <code>socket</code> module and go unrecorded. The import
+          audits do not rule that out &mdash; they check a named list of modules, and
+          <code>pydantic_core</code>, a compiled extension, is loaded on the scoring path.
+          What keeps that risk small is that the runtime depends on <code>pydantic</code> and,
+          below Python 3.11, <code>tomli</code> &mdash; a short list you can audit yourself
+          &mdash; not that a test has proved it.
         </li>
         <li>
           Lint and type findings are <strong>ratcheted</strong>: pre-existing ones are
