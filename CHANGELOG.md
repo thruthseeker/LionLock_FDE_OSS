@@ -56,10 +56,12 @@ Compatibility note before upgrading.**
 
 ### Compatibility
 
-- **Extra custom columns on a telemetry table are now refused**, even where named-column inserts
-  worked before. This can turn startup into a `RuntimeError` through `get_writer`. Review
-  customized schemas and take a backup before upgrading: initialization will not remove columns or
-  their data to make a schema fit, and unknown layouts need a separately reviewed manual migration.
+- **On the native `sqlite:///...` path, extra custom columns on a telemetry table are now
+  refused**, even where named-column inserts worked before. This can turn startup into a
+  `RuntimeError` through `get_writer`. Review customized schemas and take a backup before
+  upgrading: initialization will not remove columns or their data to make a schema fit, and
+  unknown layouts need a separately reviewed manual migration. SQLAlchemy URI forms such as
+  `sqlite+pysqlite:///...`, PostgreSQL and the Trust Overlay initializers are unaffected.
 - Receivers admit `1.0.0b2` as a public version label. **Upgrade a receiver before its clients**,
   because an older receiver rejects snapshots that carry the new label.
 
