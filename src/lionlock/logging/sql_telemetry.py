@@ -2,9 +2,9 @@ import atexit
 import os
 import sqlite3
 import threading
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Tuple
 from urllib.parse import urlparse
 
 try:
@@ -183,33 +183,78 @@ def _sqlite_path_from_uri(uri: str) -> str | None:
     return path
 
 
-def _sqlite_table_columns(db_path: str, table: str) -> List[str]:
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return [row[1] for row in rows]
+def _sqlite_shape(columns: Iterable[Tuple[str, str]]) -> Dict[str, Tuple[str, int, int]]:
+    return {
+        name: (definition.split()[0].upper(), int("PRIMARY KEY" in definition), 0)
+        for name, definition in columns
+    }
 
 
-def _sqlite_table_exists(db_path: str, table: str) -> bool:
-    with sqlite3.connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-            (table,),
-        ).fetchone()
-    return row is not None
+@contextmanager
+def _sqlite_telemetry_transaction(
+    db_path: str,
+    required: Iterable[Tuple[str, List[Tuple[str, str]]]],
+    *,
+    timeout_s: float = 5.0,
+) -> Iterator[sqlite3.Connection]:
+    """Validate native telemetry tables before any DDL/DML, under the same write lock.
 
-
-def _init_sqlite_table(db_path: str, table: str, columns: Iterable[Tuple[str, str]]) -> None:
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(_create_table_sql(table, columns))
-        conn.commit()
-
-
-def _init_sqlite_failsafe_table(db_path: str, table: str) -> None:
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(_create_table_sql(table, FAILSAFE_COLUMNS))
-        conn.commit()
+    Column compatibility is not proof of ownership. Unknown layouts are never rebuilt;
+    the only upgrade is adding the two auth columns absent from the initial OSS schema.
+    """
+    schemas = {
+        "lionlock_sessions": SESSIONS_COLUMNS,
+        "lionlock_signals": PUBLIC_SIGNALS_COLUMNS,
+        "lionlock_failsafe": FAILSAFE_COLUMNS,
+    }
+    requested = list(required)
+    for table, columns in requested:
+        if schemas.get(table) != columns:
+            raise ValueError(f"SQL telemetry table role mismatch: {table}")
+    if len({table for table, _ in requested}) != len(requested):
+        raise ValueError("SQL telemetry table roles must be distinct")
+    if db_path != ":memory:":
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(db_path, timeout=timeout_s, isolation_level=None)) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            table_kinds = {
+                row[1].lower(): (row[2], row[4], row[5])
+                for row in conn.execute("PRAGMA main.table_list")
+            }
+            if not table_kinds:
+                raise ValueError("SQL telemetry schema validation requires SQLite 3.37 or newer")
+            legacy_signals = False
+            for table, columns in schemas.items():
+                objects = conn.execute(
+                    "SELECT type FROM sqlite_master WHERE name=? COLLATE NOCASE", (table,)
+                ).fetchall()
+                if not objects:
+                    continue
+                if objects != [("table",)] or table_kinds.get(table) != ("table", 0, 0):
+                    raise ValueError(f"Incompatible SQL telemetry object: {table}")
+                actual = {
+                    row[1].lower(): (" ".join(row[2].upper().split()), row[5], row[6])
+                    for row in conn.execute(f"PRAGMA main.table_xinfo({table})")
+                }
+                if actual == _sqlite_shape(columns):
+                    continue
+                if table == "lionlock_signals" and actual == _sqlite_shape(columns[:-2]):
+                    legacy_signals = True
+                    continue
+                raise ValueError(f"Incompatible SQL telemetry schema: {table}")
+            # Validate every existing target before creating or upgrading any requested table.
+            for table, columns in requested:
+                conn.execute(_create_table_sql(table, columns))
+                if table == "lionlock_signals" and legacy_signals:
+                    for name, definition in PUBLIC_SIGNALS_COLUMNS[-2:]:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+            yield conn
+            conn.execute("COMMIT")
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
 
 
 def _init_sqlalchemy_table(uri: str, table: str, columns: Iterable[Tuple[str, str]]) -> None:
@@ -219,48 +264,6 @@ def _init_sqlalchemy_table(uri: str, table: str, columns: Iterable[Tuple[str, st
     ddl = _create_table_sql(table, columns)
     with engine.begin() as conn:
         conn.execute(text(ddl))
-
-
-def _migrate_sqlite_signals_table(db_path: str, table: str) -> bool:
-    if not _sqlite_table_exists(db_path, table):
-        return False
-    columns = _sqlite_table_columns(db_path, table)
-    if "session_pk" in columns and "event_pk" in columns:
-        return False
-    new_table = f"{table}_v2"
-    _init_sqlite_table(db_path, new_table, PUBLIC_SIGNALS_COLUMNS)
-    copy_columns = [
-        "timestamp_utc",
-        "request_id",
-        "decision",
-        "severity",
-        "reason_code",
-        "aggregate_score",
-        "repetition_score",
-        "novelty_score",
-        "coherence_score",
-        "context_score",
-        "hallucination_score",
-        "duration_ms",
-        "config_hash",
-    ]
-    available = [col for col in copy_columns if col in columns]
-    select_expr = ", ".join(available) if available else ""
-    insert_cols = ", ".join(available)
-    if available:
-        with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                f"INSERT INTO {new_table} ({insert_cols}) SELECT {select_expr} FROM {table}"
-            )
-            conn.execute(f"DROP TABLE {table}")
-            conn.execute(f"ALTER TABLE {new_table} RENAME TO {table}")
-            conn.commit()
-    else:
-        with sqlite3.connect(db_path) as conn:
-            conn.execute(f"DROP TABLE {table}")
-            conn.execute(f"ALTER TABLE {new_table} RENAME TO {table}")
-            conn.commit()
-    return True
 
 
 def init_db(
@@ -281,11 +284,11 @@ def init_db(
     sqlite_path = _sqlite_path_from_uri(uri)
     try:
         if sqlite_path is not None:
-            _init_sqlite_table(sqlite_path, sessions_table, SESSIONS_COLUMNS)
-            _migrate_sqlite_signals_table(sqlite_path, table)
-            _init_sqlite_table(sqlite_path, table, PUBLIC_SIGNALS_COLUMNS)
+            required = [(sessions_table, SESSIONS_COLUMNS), (table, PUBLIC_SIGNALS_COLUMNS)]
             if failsafe_table:
-                _init_sqlite_failsafe_table(sqlite_path, failsafe_table)
+                required.append((failsafe_table, FAILSAFE_COLUMNS))
+            with _sqlite_telemetry_transaction(sqlite_path, required):
+                pass
             return True, "Initialized sqlite tables."
         if create_engine is None or text is None:
             return False, "SQLAlchemy not installed; cannot initialize non-sqlite URI."
@@ -400,9 +403,12 @@ class SQLTelemetryWriter(SQLBatchWriter):
     def _init_tables(self) -> None:
         try:
             if self.sqlite_path is not None:
-                _init_sqlite_table(self.sqlite_path, self.sessions_table, SESSIONS_COLUMNS)
-                _migrate_sqlite_signals_table(self.sqlite_path, self.table)
-                _init_sqlite_table(self.sqlite_path, self.table, PUBLIC_SIGNALS_COLUMNS)
+                with _sqlite_telemetry_transaction(
+                    self.sqlite_path,
+                    [(self.sessions_table, SESSIONS_COLUMNS), (self.table, PUBLIC_SIGNALS_COLUMNS)],
+                    timeout_s=self.connect_timeout_s,
+                ):
+                    pass
             else:
                 if create_engine is None or text is None:
                     raise RuntimeError("SQLAlchemy not installed.")
@@ -579,10 +585,16 @@ def begin_session(
     if not uri or not session_id:
         return None
     sqlite_path = _sqlite_path_from_uri(uri)
+    if sqlite_path == ":memory:":
+        # Sessions span connections; keep the existing non-persistent-memory outcome.
+        return None
     try:
         if sqlite_path is not None:
-            _init_sqlite_table(sqlite_path, sessions_table, SESSIONS_COLUMNS)
-            with sqlite3.connect(sqlite_path) as conn:
+            with _sqlite_telemetry_transaction(
+                sqlite_path,
+                [(sessions_table, SESSIONS_COLUMNS)],
+                timeout_s=float(config.get("connect_timeout_s", 5)),
+            ) as conn:
                 conn.execute(
                     (
                         f"INSERT OR IGNORE INTO {sessions_table} "
@@ -692,7 +704,11 @@ def update_session_anomalies(
     sqlite_path = _sqlite_path_from_uri(uri)
     try:
         if sqlite_path is not None:
-            with sqlite3.connect(sqlite_path) as conn:
+            with _sqlite_telemetry_transaction(
+                sqlite_path,
+                [(sessions_table, SESSIONS_COLUMNS)],
+                timeout_s=float(config.get("connect_timeout_s", 5)),
+            ) as conn:
                 conn.execute(
                     (
                         f"UPDATE {sessions_table} SET has_anomalies=?, anomaly_count=?, "
@@ -706,7 +722,6 @@ def update_session_anomalies(
                         session_id,
                     ),
                 )
-                conn.commit()
             return
         if create_engine is None or text is None:
             return
@@ -751,18 +766,19 @@ def write_failsafe_blob(
     except ValueError as exc:
         return False, f"Failsafe SQL insert failed: {exc}"
     sqlite_path = _sqlite_path_from_uri(uri)
+    if sqlite_path == ":memory:":
+        return False, "Failsafe SQL insert requires a file-backed SQLite database."
     try:
         if sqlite_path is not None:
-            _init_sqlite_failsafe_table(sqlite_path, table)
-            with sqlite3.connect(
+            with _sqlite_telemetry_transaction(
                 sqlite_path,
-                timeout=int(config.get("connect_timeout_s", 5)),
+                [(table, FAILSAFE_COLUMNS)],
+                timeout_s=float(config.get("connect_timeout_s", 5)),
             ) as conn:
                 sql_stmt = (
                     f"INSERT INTO {table} (timestamp_utc,request_id,payload_b64) VALUES (?,?,?)"
                 )
                 conn.execute(sql_stmt, (timestamp_utc, request_id, payload_b64))
-                conn.commit()
             return True, "Failsafe SQL insert ok."
         if create_engine is None or text is None:
             return False, "SQLAlchemy not installed; cannot write failsafe SQL."
