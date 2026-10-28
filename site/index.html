@@ -2,8 +2,8 @@
 <!--
   LionLock FDE — project site. One static page, no scripts, no analytics, no cookies.
 
-  AT EACH RELEASE, change the version in exactly two places, both marked `data-version`:
-  the badge in the header and the install command in the hero. Nothing else carries it.
+  At each release, verify PyPI installation before updating the badge, install command
+  and release-status note. Keep them aligned with README.md and docs/RELEASING.md.
 
   Every claim on this page maps to code in the repository. If a claim stops being true,
   change the page in the same pull request that changes the code.
@@ -28,7 +28,7 @@
       <img src="lionlock-mark.svg" alt="" width="32" height="32" class="brand-mark">
       <span class="brand-text">LionLock<span class="brand-dim">&nbsp;FDE</span></span>
     </a>
-    <span class="badge" data-version>Public beta 1.0.0b2</span>
+    <span class="badge" data-version>Beta source 1.0.0b2</span>
     <nav class="nav" aria-label="Project links">
       <a href="https://github.com/thruthseeker/LionLock_FDE_OSS">GitHub</a>
       <a href="https://pypi.org/project/lionlock/">PyPI</a>
@@ -50,8 +50,14 @@
         always gives the same output.
       </p>
       <div class="install">
-        <pre data-version><code>pip install lionlock==1.0.0b2</code></pre>
+        <pre data-version><code>python -m pip install "lionlock @ git+https://github.com/thruthseeker/LionLock_FDE_OSS.git@05434565c96a9534494110cf048caad804dc343d"</code></pre>
       </div>
+      <p class="hero-note">
+        Checked 28 October 2026: PyPI has 1.0.0b1; b2 publication is pending. The command above
+        installs the verified b2 source and requires Python 3.10+ and Git. Use a fresh virtual
+        environment. Before upgrading, back up telemetry data and upgrade receivers before clients.
+        Read the <a href="https://github.com/thruthseeker/LionLock_FDE_OSS/blob/main/CHANGELOG.md#compatibility">SQLite compatibility notes</a>.
+      </p>
       <p class="hero-cta">
         <a class="btn btn-primary" href="#try">See it run</a>
         <a class="btn" href="#determinism">How determinism is checked</a>

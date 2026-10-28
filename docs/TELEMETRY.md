@@ -213,11 +213,14 @@ same way (see below).
 
 ## Running the receiver
 
-The reference receiver uses only the Python standard library. Install a published release from
-PyPI:
+The reference receiver uses only the Python standard library. Follow the
+[current installation instructions](../README.md) first: b2 is available from a
+pinned source commit while its PyPI publication is pending. **Upgrade the receiver before its
+clients**, because older receivers reject the b2 version label. Back up existing telemetry data
+and review the [SQLite compatibility notes](../CHANGELOG.md#compatibility) before upgrading.
+Then start the receiver:
 
 ```bash
-pip install lionlock==1.0.0b2
 lionlock-telemetry serve --data-dir /var/lib/lionlock-telemetry --host 127.0.0.1 --port 8787
 ```
 
@@ -238,8 +241,13 @@ With nginx, use `access_log off;` and `client_max_body_size 16m;` in the locatio
 To require tokens, issue one per partner or deployment with the bundled tool. It writes the
 token to a file with owner-only permissions and appends only its SHA-256 hash to the allowlist:
 
+The token helper is a repository script, not an installed CLI. Obtain the same pinned source
+revision in a separate directory before running it from your activated LionLock environment:
+
 ```bash
-python scripts/log_token_tool.py generate --token-path upload.token --hashes-path token_hashes.txt
+git clone --no-checkout https://github.com/thruthseeker/LionLock_FDE_OSS.git LionLock-token-tools
+git -C LionLock-token-tools checkout --detach 05434565c96a9534494110cf048caad804dc343d
+python LionLock-token-tools/scripts/log_token_tool.py generate --token-path upload.token --hashes-path token_hashes.txt
 lionlock-telemetry serve --data-dir /var/lib/lionlock-telemetry --token-hashes-file token_hashes.txt
 ```
 

@@ -1,8 +1,8 @@
-# LionLock FDE – Public Beta (1.0.0b2)
+# LionLock FDE – Beta Source (1.0.0b2)
 
 **LionLock_FDE** scores LLM replies with fixed, deterministic rules and turns those scores into a gate decision. It also provides a tamper-evident local log to record those decisions in.
 
-No AI model is involved in scoring or deciding: the same input always gives the same output. This is a **public beta** of open-source LionLock (version `1.0.0b2`), suitable for developers, researchers, and AI safety teams. Interfaces may change before 1.0.0. No premium modules or proprietary datasets are included.
+No AI model is involved in scoring or deciding: the same input always gives the same output. This is the **beta source** of open-source LionLock (version `1.0.0b2`), suitable for developers, researchers, and AI safety teams. Interfaces may change before 1.0.0. No premium modules or proprietary datasets are included.
 
 ---
 
@@ -43,11 +43,33 @@ Stress-tests policies across multiple profiles and gating thresholds.
 
 ## 🚀 Get Started
 
-Install the library and the `lionlock-telemetry` and `lionlock-sim` commands from PyPI:
+**Release status checked 28 October 2026:** PyPI provides `1.0.0b1`; `1.0.0b2` is not yet
+published, so `pip install lionlock==1.0.0b2` currently fails. The b1 package lacks the privacy,
+receiver-security and SQLite data-preservation fixes in the [b2 changelog](CHANGELOG.md).
+
+For external testing now, install the b2 source at the verified commit below. This requires
+Python 3.10+ and Git; use a fresh virtual environment. It installs the library and both commands
+(`lionlock-telemetry` and `lionlock-sim`):
 
 ```bash
-pip install lionlock==1.0.0b2
+python -m pip install "lionlock @ git+https://github.com/thruthseeker/LionLock_FDE_OSS.git@05434565c96a9534494110cf048caad804dc343d"
+python -c "from importlib.metadata import version; print(version('lionlock'))"
 ```
+
+The version check should print `1.0.0b2`; this is a source installation, not evidence of a PyPI
+release. Once [PyPI lists b2](https://pypi.org/project/lionlock/#history), use:
+
+```bash
+python -m pip install --index-url https://pypi.org/simple lionlock==1.0.0b2
+```
+
+**Existing installations:** back up telemetry data before upgrading and **upgrade the receiver
+before its clients**. Older receivers reject the b2 version label. Native `sqlite:///...` sinks
+with extra custom columns now refuse startup without removing data; review the
+[compatibility notes](CHANGELOG.md#compatibility) before proceeding. Do not delete or rebuild a
+database to make an upgrade pass. Internet-facing receivers must require tokens.
+
+Maintainers: see the [release checklist](docs/RELEASING.md) for the protected publishing process.
 
 ```python
 from lionlock.core.scoring import score_response
