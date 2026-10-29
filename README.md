@@ -31,8 +31,7 @@ Flags score patterns across turns, such as rising risk and decisions that disagr
 Logs decisions and trust records to a local, hash-chained SQLite file by default. Opt-in uploads send only allowlisted, pseudonymized fields to a receiver you run. SQL-backed telemetry remains available when explicitly enabled in config.
 
 ### ✅ Module 05 – Gating Core & Policy Engine
-Computes deterministic gate decisions from trust signals. `gating.enabled` / `LIONLOCK_GATING_ENABLED` switches between suggested actions and log-only (`ALLOW`); acting on the decision is up to the caller.
-
+Computes deterministic gate decisions from trust signals. `gating.enabled` / `LIONLOCK_GATING_ENABLED` controls suggested actions versus log-only (`ALLOW`) for config-driven evaluation. Direct `evaluate_policy` calls use the `gating_enabled` argument, which defaults to `True`. Acting on the decision is up to the caller.
 ### ✅ Module 06 – Replay Evaluation Layer
 Re-evaluates logged decisions under a chosen policy to check missed signals, drift accumulation, and gate performance.
 
