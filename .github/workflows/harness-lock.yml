@@ -31,7 +31,7 @@ jobs:
   harness-lock:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Compared against the merge-base, the same baseline the scope and privacy checks use, so
           # a lock change already on the base branch is not mistaken for this change's work.
