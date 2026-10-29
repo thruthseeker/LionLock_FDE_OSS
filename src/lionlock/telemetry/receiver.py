@@ -374,7 +374,7 @@ class Receiver:
             if not self._evidence_intact(recorded):
                 return self._evidence_failure()
             return IngestResult(200, {"status": "duplicate", "file_sha256": received_sha})
-        if not self._within_rate(install_id):
+        if not self._within_rate(self._rate_key(lowered, install_id)):
             return _error(429, "upload rate limit exceeded", {"Retry-After": "3600"})
 
         try:
@@ -412,19 +412,32 @@ class Receiver:
         if declared != (info.install_id, str(info.segment_index), info.content_digest):
             raise SnapshotError("upload headers do not match the snapshot metadata")
 
-    def _within_rate(self, install_id: str) -> bool:
+    def _rate_key(self, headers: Mapping[str, str], install_id: str) -> str:
+        """Who an upload is counted against.
+
+        With tokens, the token: a client cannot change it without a new token, so rotating install
+        ids does not reset its budget. Anonymous uploads can only be counted per install id, which
+        the client chooses, so that limit slows a misbehaving client but cannot stop a deliberate
+        one; docs/TELEMETRY.md says to require tokens on any public endpoint.
+        """
+        if self.config.token_hashes:
+            header = headers.get("authorization", "")
+            return "token:" + hash_token(header[len("Bearer ") :].strip())
+        return "install:" + install_id
+
+    def _within_rate(self, key: str) -> bool:
         if self.config.uploads_per_hour <= 0:
             return True
         hour = int(time.time() // 3600)
         with self._rate_lock:
             if len(self._rate) > 100_000:
                 self._rate.clear()
-            bucket_hour, count = self._rate.get(install_id, (hour, 0))
+            bucket_hour, count = self._rate.get(key, (hour, 0))
             if bucket_hour != hour:
                 count = 0
             if count >= self.config.uploads_per_hour:
                 return False
-            self._rate[install_id] = (hour, count + 1)
+            self._rate[key] = (hour, count + 1)
         return True
 
     def _stored_sha_for(self, received_sha: str) -> str | None:

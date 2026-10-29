@@ -78,6 +78,9 @@ token_path = ""
 interval_hours = 24
 ```
 
+`enabled` switches uploads on only when it is `true`, or a string such as `"true"`, `"yes"` or
+`"on"`. Anything else, including `"false"`, `"off"`, a typo or a number, leaves uploads off.
+
 | Environment variable | Effect |
 |---|---|
 | `DO_NOT_TRACK=1` | Disables uploads, overriding every other setting |
@@ -136,7 +139,7 @@ otherwise (including rejected or invalid snapshots), and 2 when uploads are disa
 | `install_id` | Random 128-bit ID, created on first export; rotate with `reset-identity` |
 | `segment_index`, `prev_segment_digest` | Segment counter and the digest of the previous segment |
 | `content_digest` | SHA-256 over the canonical content of this snapshot |
-| `lionlock_version` | A published LionLock release (currently `0.1.0` or `1.0.0b1`); anything else, including private or development build numbers, becomes `unknown` |
+| `lionlock_version` | A published LionLock release (currently `0.1.0`, `1.0.0b1` or `1.0.0b2`); anything else, including private or development build numbers, becomes `unknown` |
 | `python` | Major.minor only, for example `3.11` |
 | `platform` | `linux`, `macos`, `windows`, `freebsd`, or `other` |
 | `<table>_rows`, `<table>_pruned_before_export` | Row counts and rows lost to local pruning |
@@ -210,11 +213,14 @@ same way (see below).
 
 ## Running the receiver
 
-The reference receiver uses only the Python standard library. Install a published release from
-PyPI:
+The reference receiver uses only the Python standard library. Follow the
+[current installation instructions](../README.md) first: b2 is available from a
+pinned source commit while its PyPI publication is pending. **Upgrade the receiver before its
+clients**, because older receivers reject the b2 version label. Back up existing telemetry data
+and review the [SQLite compatibility notes](../CHANGELOG.md#compatibility) before upgrading.
+Then start the receiver:
 
 ```bash
-pip install lionlock==1.0.0b1
 lionlock-telemetry serve --data-dir /var/lib/lionlock-telemetry --host 127.0.0.1 --port 8787
 ```
 
@@ -235,14 +241,22 @@ With nginx, use `access_log off;` and `client_max_body_size 16m;` in the locatio
 To require tokens, issue one per partner or deployment with the bundled tool. It writes the
 token to a file with owner-only permissions and appends only its SHA-256 hash to the allowlist:
 
+The token helper is a repository script, not an installed CLI. Obtain the same pinned source
+revision in a separate directory before running it from your activated LionLock environment:
+
 ```bash
-python scripts/log_token_tool.py generate --token-path upload.token --hashes-path token_hashes.txt
+git clone --no-checkout https://github.com/thruthseeker/LionLock_FDE_OSS.git LionLock-token-tools
+git -C LionLock-token-tools checkout --detach 05434565c96a9534494110cf048caad804dc343d
+python LionLock-token-tools/scripts/log_token_tool.py generate --token-path upload.token --hashes-path token_hashes.txt
 lionlock-telemetry serve --data-dir /var/lib/lionlock-telemetry --token-hashes-file token_hashes.txt
 ```
 
 Clients set `token_path` (or `LIONLOCK_UPLOAD_TOKEN`). The receiver stores only hashes, so a
-leaked allowlist does not reveal any token. Without a token file, the receiver accepts anonymous
-uploads, rate-limited per install. A token file that lists no hashes (empty, or comments only) is
+leaked allowlist does not reveal any token. With tokens, the upload rate limit counts per token, so
+a client cannot reset it by changing its install id. Without a token file, the receiver accepts
+anonymous uploads, rate-limited per install id. The client chooses that id, so the anonymous limit
+slows a misbehaving client but cannot stop a deliberate one: **require tokens on any endpoint
+reachable from the internet.** A token file that lists no hashes (empty, or comments only) is
 refused at startup instead of being treated as anonymous mode.
 
 ### What the receiver checks
@@ -418,7 +432,7 @@ The command prints a JSON summary of the rows and jobs it loaded, and exits non-
 | A crafted SQLite file attacks the parser | Size caps, read-only defensive open, `quick_check`, schema check before any data is read; isolate the process |
 | A bearer token leaks in transit | HTTPS only (plain http only for loopback, never via a proxy), no redirects, token read from env or file and never logged; the server stores only hashes |
 | Re-identification through identifiers | Keyed HMAC pseudonyms that cannot be linked across installs; hour-level timestamps; coarse platform data; identity reset |
-| Poisoned or fake uploads | Optional tokens, per-install rate limits, segment chain status; treat community data as statistical |
+| Poisoned or fake uploads | Optional tokens, per-token rate limits (per-install, and bypassable, without tokens), segment chain status; treat community data as statistical |
 | Local log tampering | Per-table hash chains and `lionlock-telemetry verify` |
 | Receiver compromise | Data minimization limits what an attacker can obtain |
 

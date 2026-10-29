@@ -132,6 +132,33 @@ def test_uploads_are_off_by_default_and_never_touch_the_network(tmp_path, monkey
     assert maybe_export_and_upload(config)["status"] == "disabled"
 
 
+@pytest.mark.parametrize(
+    "value, allowed",
+    [
+        (True, True),
+        ("true", True),
+        (" Yes ", True),
+        ("on", True),
+        (False, False),
+        ("false", False),
+        ("False", False),
+        ("no", False),
+        ("0", False),
+        ("off", False),
+        ("", False),
+        ("ture", False),
+        (1, False),
+        (None, False),
+    ],
+)
+def test_enabled_switch_fails_closed(tmp_path, monkeypatch, value, allowed) -> None:
+    monkeypatch.delenv("LIONLOCK_TELEMETRY_UPLOAD", raising=False)
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
+    config = _config(tmp_path, endpoint="https://telemetry.example.org")
+    config["telemetry_upload"]["enabled"] = value
+    assert resolve_upload_settings(config).allowed is allowed
+
+
 def test_do_not_track_overrides_every_opt_in(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DO_NOT_TRACK", "1")
     monkeypatch.setenv("LIONLOCK_TELEMETRY_UPLOAD", "on")
@@ -207,6 +234,26 @@ def test_receiver_can_require_bearer_tokens(tmp_path, start_receiver, monkeypatc
     accepted = export_and_upload(config, sleep=lambda _s: None)
     assert [item["status"] for item in accepted["uploads"]] == ["uploaded"]
     assert accepted["pending"] == 0
+
+
+def test_token_mode_rate_limits_per_token_not_per_install(tmp_path) -> None:
+    token = "llk_test_token_value_0123456789"
+    receiver = Receiver(
+        ReceiverConfig(
+            data_dir=tmp_path / "server",
+            token_hashes=frozenset({hash_token(token)}),
+            uploads_per_hour=1,
+        )
+    )
+    first, second = _exported(tmp_path / "a"), _exported(tmp_path / "b")
+    assert validate_snapshot(first).install_id != validate_snapshot(second).install_id
+    auth = {"Authorization": f"Bearer {token}"}
+
+    accepted = receiver.handle_upload({**_upload_headers(first), **auth}, first.read_bytes())
+    assert accepted.status == 201
+    # A new install id under the same token does not reset the budget.
+    rotated = receiver.handle_upload({**_upload_headers(second), **auth}, second.read_bytes())
+    assert rotated.status == 429
 
 
 def test_token_hash_file_refuses_raw_tokens(tmp_path) -> None:

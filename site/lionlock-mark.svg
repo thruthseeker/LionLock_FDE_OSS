@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="LionLock">
+  <title>LionLock</title>
+  <!--
+    PLACEHOLDER MARK. Drawn here only so the page is complete; it is not the project logo.
+
+    It is referenced with <img> and as the favicon, which makes it an isolated document:
+    it inherits neither `currentColor` nor the page's custom properties. So it carries its
+    own colours and its own light/dark rule, and the keyhole is a real hole (fill-rule
+    evenodd) rather than a background-coloured patch, so the mark sits on any surface.
+
+    To swap in the real logo, keep those two properties: self-contained colours with a
+    `prefers-color-scheme` rule, and no reliance on the embedding page.
+  -->
+  <style>
+    .mark { fill: #9a6410; stroke: #9a6410; }
+    @media (prefers-color-scheme: dark) {
+      .mark { fill: #e0a844; stroke: #e0a844; }
+    }
+  </style>
+
+  <g class="mark">
+    <!-- shackle -->
+    <path d="M10.4 13.6V10a5.6 5.6 0 0 1 11.2 0v3.6" fill="none" stroke-width="2.2" stroke-linecap="round"/>
+    <!-- mane rays: a hint of the lion that does not compete with the lock at 20px -->
+    <path d="M4.7 9.3l2.7 1.2M27.3 9.3l-2.7 1.2M7.3 4.4l2 2M24.7 4.4l-2 2"
+          fill="none" stroke-width="1.7" stroke-linecap="round" opacity=".5"/>
+    <!-- body, with the keyhole cut out of it -->
+    <path fill-rule="evenodd" d="M8 13h16a2.6 2.6 0 0 1 2.6 2.6v10.2A2.6 2.6 0 0 1 24 28.4H8a2.6 2.6 0 0 1-2.6-2.6V15.6A2.6 2.6 0 0 1 8 13Z M16 17.1a2.1 2.1 0 1 0 0 4.2 2.1 2.1 0 0 0 0-4.2Z M14.95 21.3h2.1v3.2a1.05 1.05 0 0 1-2.1 0Z"/>
+  </g>
+</svg>

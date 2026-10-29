@@ -816,9 +816,9 @@ def test_existing_upload_privacy_controls_remain_effective(tmp_path, monkeypatch
 # =============================================================================================
 
 REPO = Path(__file__).resolve().parents[1]
-# Verified public package versions: pyproject.toml has declared 0.1.0 and then 1.0.0b1, the
-# first public beta. Kept literal so this file runs against any revision.
-PUBLIC_PACKAGE_VERSIONS = ("0.1.0", "1.0.0b1")
+# Verified public package versions: pyproject.toml has declared 0.1.0, then 1.0.0b1 and
+# 1.0.0b2, the public betas. Kept literal so this file runs against any revision.
+PUBLIC_PACKAGE_VERSIONS = ("0.1.0", "1.0.0b1", "1.0.0b2")
 PRIVATE_NUMERIC_VERSION = "31.41.5926"
 PRIVATE_VERSION_LABELS = (
     PRIVATE_NUMERIC_VERSION,

@@ -1,0 +1,50 @@
+name: verify
+
+# The neutral referee. Whichever agent pushed, this runs the same single gate on a clean machine.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only: the gate inspects the checkout and uploads its own report, nothing else.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The scope and privacy checks diff against the merge-base with the base branch (or, on a
+          # push, the commit that last touched the contract lock), so the full history has to be
+          # present.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Set up the pinned environment
+        run: make setup PYTHON=python
+
+      # On a pull request, every open spec whose allowed_paths the change touches is treated as the
+      # job being worked, so its acceptance and scope checks block. Done specs always block.
+      - name: Verify
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            make verify CHANGED_SINCE="origin/$BASE_REF"
+          else
+            make verify
+          fi
+
+      - name: Upload the verify report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-report
+          path: harness/out/verify_report.json
+          if-no-files-found: warn

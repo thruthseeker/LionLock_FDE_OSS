@@ -1,0 +1,404 @@
+<!doctype html>
+<!--
+  LionLock FDE — project site. One static page, no scripts, no analytics, no cookies.
+
+  At each release, verify PyPI installation before updating the badge, install command
+  and release-status note. Keep them aligned with README.md and docs/RELEASING.md.
+
+  Every claim on this page maps to code in the repository. If a claim stops being true,
+  change the page in the same pull request that changes the code.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LionLock FDE</title>
+<meta name="description" content="LionLock scores LLM replies with fixed, deterministic rules, turns the score into a gate decision, and records it in a hash-chained local log you can verify. No model is involved in scoring.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="lionlock-mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="#main">
+      <img src="lionlock-mark.svg" alt="" width="32" height="32" class="brand-mark">
+      <span class="brand-text">LionLock<span class="brand-dim">&nbsp;FDE</span></span>
+    </a>
+    <span class="badge" data-version>Beta source 1.0.0b2</span>
+    <nav class="nav" aria-label="Project links">
+      <a href="https://github.com/thruthseeker/LionLock_FDE_OSS">GitHub</a>
+      <a href="https://pypi.org/project/lionlock/">PyPI</a>
+      <a href="https://github.com/thruthseeker/LionLock_FDE_OSS/blob/main/docs/QUICKSTART.md">Docs</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ---------------------------------------------------------------- hero -->
+  <section class="hero">
+    <div class="wrap">
+      <h1>A deterministic check on what your model just said.</h1>
+      <p class="lede">
+        LionLock scores an LLM reply with fixed rules, turns that score into a gate
+        decision, and records the decision in a hash-chained local log you can verify.
+        <strong>No model is involved in scoring or deciding</strong> — the same input
+        always gives the same output.
+      </p>
+      <div class="install">
+        <pre data-version><code>python -m pip install "lionlock @ git+https://github.com/thruthseeker/LionLock_FDE_OSS.git@05434565c96a9534494110cf048caad804dc343d"</code></pre>
+      </div>
+      <p class="hero-note">
+        Checked 28 October 2026: PyPI has 1.0.0b1; b2 publication is pending. The command above
+        installs the verified b2 source and requires Python 3.10+ and Git. Use a fresh virtual
+        environment. Before upgrading, back up telemetry data and upgrade receivers before clients.
+        Read the <a href="https://github.com/thruthseeker/LionLock_FDE_OSS/blob/main/CHANGELOG.md#compatibility">SQLite compatibility notes</a>.
+      </p>
+      <p class="hero-cta">
+        <a class="btn btn-primary" href="#try">See it run</a>
+        <a class="btn" href="#determinism">How determinism is checked</a>
+      </p>
+      <p class="hero-note">
+        Apache-2.0 &middot; no network access in scoring &middot; no telemetry leaves your machine unless you turn it on
+      </p>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------- what you get -->
+  <section class="section">
+    <div class="wrap">
+      <h2>What you get</h2>
+      <div class="cards">
+
+        <article class="card">
+          <h3>Deterministic scoring</h3>
+          <p>
+            Five lexical signals — repetition, novelty, sentence structure, context
+            adherence and a hallucination-risk composite — computed by fixed arithmetic
+            under signal schema <code>SE-0.4.0</code>. No machine learning, no network
+            call, no randomness.
+          </p>
+        </article>
+
+        <article class="card">
+          <h3>A decision you can act on</h3>
+          <p>
+            Each reply lands in a severity band with a suggested action, plus the signal
+            and reason code that triggered it. Thresholds are config, not magic:
+            0.45, 0.65 and 0.80 by default.
+          </p>
+          <ul class="bands">
+            <li><span class="chip chip-green">green</span> <code>ALLOW</code></li>
+            <li><span class="chip chip-yellow">yellow</span> <code>REFRESH</code></li>
+            <li><span class="chip chip-orange">orange</span> <code>REFRESH</code></li>
+            <li><span class="chip chip-red">red</span> <code>BLOCK</code></li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <h3>A log that shows tampering</h3>
+          <p>
+            Decisions you record are appended to a local SQLite file whose rows are
+            hash-chained, so an edited or removed row breaks the chain. Check it yourself:
+          </p>
+          <pre><code>lionlock-telemetry verify</code></pre>
+        </article>
+
+        <article class="card">
+          <h3>Your data stays on your machine</h3>
+          <p>
+            Everything is written to one local file, <code>logs/lionlock.db</code>.
+            Uploads are off until you opt in, and then carry only allowlisted,
+            pseudonymized fields to a receiver you run. Prompts and responses are never
+            included, and <code>DO_NOT_TRACK=1</code> turns uploads off.
+          </p>
+        </article>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- -------------------------------------------------------- how it works -->
+  <section class="section section-alt">
+    <div class="wrap">
+      <h2>How it works</h2>
+      <ol class="steps">
+        <li>
+          <span class="step-num">1</span>
+          <h3>Score</h3>
+          <p>
+            <code>score_response(prompt, reply)</code> returns the five signal scores and
+            the schema version that produced them.
+          </p>
+        </li>
+        <li>
+          <span class="step-num">2</span>
+          <h3>Decide</h3>
+          <p>
+            <code>evaluate_policy(bundle)</code> aggregates those scores into a risk
+            score, a severity band, a suggested action, and the reason it chose them.
+          </p>
+        </li>
+        <li>
+          <span class="step-num">3</span>
+          <h3>Log</h3>
+          <p>
+            Your code records the decision to the hash-chained log. Scoring and deciding
+            never write the log themselves, so nothing is recorded behind your back.
+          </p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- --------------------------------------------------------- determinism -->
+  <section class="section" id="determinism">
+    <div class="wrap narrow">
+      <h2>How determinism is checked</h2>
+      <p>
+        "Deterministic" is a claim that can be tested, so the repository tests it on every
+        pull request. One command, <code>make verify</code>, is the gate for every
+        contributor, human or AI:
+      </p>
+      <ul class="ticks">
+        <li>
+          The decision output of the real pipeline, over a fixed corpus of 17 synthetic
+          payloads, is produced <strong>twice in separate processes</strong> under
+          <code>PYTHONHASHSEED</code> 0 and 4242, and the two results must be byte-identical.
+          Different seeds are the point: an accidental dependence on set or dictionary
+          ordering shows up as a mismatch instead of passing quietly.
+        </li>
+        <li>
+          That output must also match a <strong>golden fingerprint committed before the
+          implementation existed</strong>, generated by an oracle that recomputes the
+          decision independently rather than calling the library. So the expectation is a
+          prediction the code has to meet, not a recording of what it happened to print.
+        </li>
+        <li>
+          "No AI, no network on the decision path" is enforced by tests rather than promised
+          in a README. A static audit parses each scoring, gating and export module and
+          <strong>fails if that module writes a networking, remote-database or ML
+          import</strong> &mdash; <code>torch</code>, <code>openai</code>,
+          <code>transformers</code>, <code>langchain</code> and the rest &mdash; and a second
+          test asserts the runtime dependencies name none of them either.
+        </li>
+        <li>
+          A parser cannot see everything, and the repository says so instead of leaving it
+          implied: a module can reach the network through a dependency it never names, and a
+          package's <code>__init__</code> can load code the module itself never imports. Both
+          happen here. So the property is <strong>also proved behaviourally</strong> &mdash;
+          every entry point in <code>socket</code> that can open a connection or resolve a
+          name is replaced with a recorder that raises, the pipeline runs inside that, and the
+          test demands the recorder stayed empty <em>and</em> that the product is identical to
+          the unblocked run. The empty recorder is the proof; the unchanged product is what
+          rules out a quietly swallowed fallback. The blocker is itself tested, so it cannot
+          pass for the wrong reason. One gap stays open, and this page would rather name it
+          than imply it is closed: a compiled extension calling <code>connect(2)</code> itself
+          would bypass Python's <code>socket</code> module and go unrecorded. The import
+          audits do not rule that out &mdash; they check a named list of modules, and
+          <code>pydantic_core</code>, a compiled extension, is loaded on the scoring path.
+          What keeps that risk small is that the runtime depends on <code>pydantic</code> and,
+          below Python 3.11, <code>tomli</code> &mdash; a short list you can audit yourself
+          &mdash; not that a test has proved it.
+        </li>
+        <li>
+          Lint and type findings are <strong>ratcheted</strong>: pre-existing ones are
+          tolerated, new ones fail the build.
+        </li>
+      </ul>
+      <p>
+        The gate runs in CI with a fixed environment, so a setting in a contributor's
+        shell cannot change a result. Run it yourself:
+      </p>
+      <pre><code>git clone https://github.com/thruthseeker/LionLock_FDE_OSS.git
+cd LionLock_FDE_OSS
+make setup PYTHON=python3.12
+make verify</code></pre>
+    </div>
+  </section>
+
+  <!-- -------------------------------------------------------- who it's for -->
+  <section class="section section-alt">
+    <div class="wrap">
+      <h2>Who it's for</h2>
+      <div class="cards cards-3">
+        <article class="card">
+          <h3>Developers</h3>
+          <p>
+            You want a cheap, predictable check in an LLM pipeline — one that flags a
+            looping or off-prompt reply so your code can retry or refuse, without a second
+            model call.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Researchers</h3>
+          <p>
+            You need a scorer that gives the same number next month as it did today, so a
+            result can be reproduced and a change in behaviour can be attributed.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Safety and audit teams</h3>
+          <p>
+            You need a record of what was decided and why, in a form where a deleted or
+            edited row is detectable.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- -------------------------------------------------------------- try it -->
+  <section class="section" id="try">
+    <div class="wrap narrow">
+      <h2>Try it</h2>
+      <p>Four lines, no configuration, no network:</p>
+      <pre><code>from lionlock.core.scoring import score_response
+from lionlock.core.gating import evaluate_policy
+
+prompt = "What is the capital of France?"
+reply = "The capital of France is Paris."
+
+decision = evaluate_policy(score_response(prompt, reply))
+print(decision.severity, decision.gating_decision, decision.reason_code)</code></pre>
+      <pre class="out"><code>green ALLOW hallucination_risk</code></pre>
+      <p>
+        A grounded answer passes. The same code on a reply that has started looping, and on
+        a one-word answer to a detailed prompt, returns this instead:
+      </p>
+      <div class="table-scroll">
+        <table>
+          <caption>Actual output of the example above with the reply replaced.</caption>
+          <thead>
+            <tr><th scope="col">Reply</th><th scope="col">Band</th><th scope="col">Action</th><th scope="col">Reason</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>"The capital of France is Paris."</td>
+              <td><span class="chip chip-green">green</span></td>
+              <td><code>ALLOW</code></td>
+              <td><code>hallucination_risk</code></td>
+            </tr>
+            <tr>
+              <td>"Paris is the capital." &times;&nbsp;4</td>
+              <td><span class="chip chip-yellow">yellow</span></td>
+              <td><code>REFRESH</code></td>
+              <td><code>repetition_loop</code></td>
+            </tr>
+            <tr>
+              <td>"Yes." &mdash; to a long analytical prompt</td>
+              <td><span class="chip chip-orange">orange</span></td>
+              <td><code>REFRESH</code></td>
+              <td><code>hallucination_risk</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="after-table">
+        Acting on the decision is your code's job. The
+        <a href="https://github.com/thruthseeker/LionLock_FDE_OSS/blob/main/docs/GATING_POLICY.md">gating policy</a>
+        describes the contract, and
+        <a href="https://github.com/thruthseeker/LionLock_FDE_OSS/blob/main/examples/quickstart.py">examples/quickstart.py</a>
+        shows the logging calls.
+      </p>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------- what it does not -->
+  <section class="section section-alt">
+    <div class="wrap narrow">
+      <h2>What it doesn't do yet</h2>
+      <p class="sub">
+        This is a public beta, and the honest list matters more than the feature list.
+      </p>
+      <ul class="limits">
+        <li>
+          <strong>It doesn't stop a model call by itself.</strong> It returns a decision;
+          your code has to act on it.
+        </li>
+        <li>
+          <strong>Its signals are text heuristics, not fact-checking.</strong> They catch
+          loops and some structural problems, and they can miss a fluent, confident answer
+          that is simply wrong.
+        </li>
+        <li>
+          <strong>No accuracy figures have been published.</strong> There is no labelled
+          evaluation set yet, so there is no precision or recall to quote.
+        </li>
+        <li>
+          <strong>The fatigue score is uncalibrated.</strong> An attempt to calibrate it was
+          abandoned because a threshold fitted on one set of results did not carry over to
+          another, so it is withheld from the gating channel when its inputs are missing.
+        </li>
+        <li>
+          <strong>Tokenization is English-oriented.</strong> It matches
+          <code>[A-Za-z0-9']+</code>, so accented and non-Latin scripts score differently
+          from English text.
+        </li>
+      </ul>
+      <p>
+        Interfaces may still change before 1.0.0.
+      </p>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- contribute -->
+  <section class="section" id="contribute">
+    <div class="wrap narrow">
+      <h2>Contribute</h2>
+      <p>
+        The gate is the same for everyone: open a pull request and <code>make verify</code>
+        has to pass. Pre-existing lint and type findings are tolerated; new ones are not.
+      </p>
+      <ul class="links">
+        <li><a href="https://github.com/thruthseeker/LionLock_FDE_OSS/blob/main/docs/CONTRIBUTING.md">Contributing guide</a> — setup, the gate, and what a good change looks like</li>
+        <li><a href="https://github.com/thruthseeker/LionLock_FDE_OSS/blob/main/AGENTS.md">AGENTS.md</a> — how an AI agent is expected to work in this repository</li>
+        <li><a href="https://github.com/thruthseeker/LionLock_FDE_OSS/issues">Issues</a> — bugs, and the gaps listed above</li>
+        <li><a href="https://github.com/thruthseeker/LionLock_FDE_OSS/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+      </ul>
+      <p class="security-note">
+        <strong>Found a vulnerability?</strong> Please report it privately: open the
+        repository's
+        <a href="https://github.com/thruthseeker/LionLock_FDE_OSS/security/advisories/new">Security tab and choose "Report a vulnerability"</a>.
+        Only the maintainers can see it. Please don't open a public issue for a suspected
+        vulnerability.
+      </p>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <p>
+      <img src="lionlock-mark.svg" alt="" width="20" height="20" class="footer-mark">
+      <span>LionLock FDE</span>
+    </p>
+    <p>
+      Licensed under the
+      <a href="https://github.com/thruthseeker/LionLock_FDE_OSS/blob/main/LICENSE">Apache License 2.0</a>.
+      Copyright &copy; 2024 LionLock Maintainers.
+    </p>
+    <p class="footer-tm">
+      The LionLock name and logo are not covered by the Apache-2.0 licence. You may use
+      them to refer to this project; please don't use them to imply endorsement of your
+      own product.
+    </p>
+    <p class="footer-links">
+      <a href="https://github.com/thruthseeker/LionLock_FDE_OSS">Source</a>
+      <a href="https://pypi.org/project/lionlock/">PyPI</a>
+      <a href="https://github.com/thruthseeker/LionLock_FDE_OSS/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://github.com/thruthseeker/LionLock_FDE_OSS/blob/main/docs/SECURITY.md">Security</a>
+    </p>
+    <p class="footer-dim">
+      This site has no analytics, no cookies, no forms and no third-party scripts.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

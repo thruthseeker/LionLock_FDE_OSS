@@ -324,8 +324,13 @@ def test_public_label_sets_match_the_values_the_code_emits() -> None:
     assert policy.SIGNAL_SCHEMA_VERSIONS[-1] == SIGNAL_SCHEMA_VERSION
     assert policy.TRUST_LOGIC_VERSIONS == (TRUST_LOGIC_VERSION_DEFAULT,)
     assert policy.RUNTIME_MODES == (resolve_runtime_mode(None),)
+    # Run from a source tree (PYTHONPATH=src, as the harness and CI do) there is no installed
+    # metadata, so get_lionlock_version falls back to "0.0.0-dev": not a release, so it must be
+    # labelled unknown. The shipped version is checked by
+    # test_declared_package_version_is_in_the_public_set.
     installed = get_lionlock_version({})
-    assert policy.package_version_label(installed) == installed
+    expected = policy.UNKNOWN_VERSION if installed == "0.0.0-dev" else installed
+    assert policy.package_version_label(installed) == expected
 
 
 @pytest.mark.parametrize(
@@ -333,8 +338,10 @@ def test_public_label_sets_match_the_values_the_code_emits() -> None:
     [
         ("0.1.0", "0.1.0"),
         ("1.0.0b1", "1.0.0b1"),
-        ("1.0.0b2", "unknown"),
+        ("1.0.0b2", "1.0.0b2"),
+        ("1.0.0b3", "unknown"),
         ("1.0.0b1+acme.internal", "unknown"),
+        ("1.0.0b2+acme.internal", "unknown"),
         ("unknown", "unknown"),
         ("31.41.5926", "unknown"),
         ("1.2.3rc1", "unknown"),

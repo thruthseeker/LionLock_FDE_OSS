@@ -1,0 +1,50 @@
+name: pages
+
+# Publishes the static page in site/ to GitHub Pages.
+#
+# This workflow cannot deploy until Pages is switched on for the repository with
+# "GitHub Actions" as the source (Settings -> Pages -> Build and deployment -> Source).
+# Until then `configure-pages` fails, which is why the trigger is narrow: nothing runs
+# on a pull request, and nothing runs for a change that does not touch the site.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# Only what deploy-pages needs: read the tree, mint the Pages token, publish.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel one halfway: a cancelled deploy can
+# leave the site on a half-published version.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/configure-pages@v5
+
+      # The site is plain HTML and CSS, so there is nothing to build: the directory
+      # is uploaded as it stands.
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v5

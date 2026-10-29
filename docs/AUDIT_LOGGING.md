@@ -18,6 +18,58 @@ canonical audit chain.
 
 ## SQL sink delivery guarantees
 
+### Native SQLite initialization and preservation
+
+For the opt-in SQL telemetry sink, `sqlite:///...` initialization checks all existing
+`lionlock_sessions`, `lionlock_signals` and `lionlock_failsafe` objects before creating or
+altering any requested table. The table names must match their roles. Views, virtual tables,
+`WITHOUT ROWID`/`STRICT` tables, and unknown column layouts are refused. Column names, normalized
+declared types, primary keys and hidden/generated columns are checked through SQLite metadata;
+column order is immaterial. Extra CHECK/UNIQUE constraints, indexes and triggers are retained.
+These checks require SQLite 3.37 or newer (`table_list` and `table_xinfo`); an older engine is
+refused before schema changes. A matching layout establishes structural compatibility, not
+database ownership or the authenticity of its contents.
+
+All three canonical tables are checked even when the operation requests only one or two. An
+incompatible, unrequested failsafe table can therefore prevent writer startup or session writes.
+**Upgrade compatibility:** extra custom columns are refused, even on a telemetry table that worked
+previously with named-column inserts. This can turn startup into a `RuntimeError` through
+`get_writer`. Review customized schemas and backups before upgrading; initialization does not
+remove those columns or their data to make the schema fit.
+
+The supported older layout is the initial OSS signals schema, which has `event_pk` and
+`session_pk` but lacks `auth_token_id` and `auth_signature`. It is upgraded by adding those two
+nullable columns, preserving the existing rows and keys. Initialization never rebuilds, drops
+or renames a table. Unknown layouts, including unkeyed partial tables, need a separately reviewed
+manual migration. A leftover `lionlock_signals_v2` table is left untouched, even if the original
+signals table is absent; initialization does not recover its rows automatically.
+
+Native initialization uses one connection, explicit `BEGIN IMMEDIATE`, and one commit or rollback.
+Schema validation and requested DDL share that transaction. Session begin/update and failsafe
+inserts validate under the same write lock as their DML. The connection timeout bounds startup
+lock waits (five seconds by default; writer startup uses `connect_timeout_s`). Another writer can
+therefore cause a startup refusal on timeout. No claim of power-loss durability follows from
+transaction rollback tests, and running background batches do not revalidate a schema changed by
+another actor after startup.
+Session anomaly updates now initialize a missing sessions table, database file and parent
+directory before the update; the previous bare update did not create that schema.
+
+Refusals preserve the existing API contracts: `init_db` returns `(False, message)` and SQL writer
+startup records its error, which `get_writer` propagates as `RuntimeError`. `begin_session` returns
+`None` and `update_session_anomalies` returns silently, so their callers cannot distinguish a schema
+refusal from other caught failures through the return value. A rejected `write_failsafe_blob`
+returns `(False, message)` and does **not** persist the new blob. Callers must handle these outcomes;
+unhandled telemetry startup errors can interrupt a caller even though scoring/gating are unchanged.
+
+This preservation guard applies to the native `sqlite:///...` path. SQLAlchemy URI forms such as
+`sqlite+pysqlite:///...`, PostgreSQL, and the separate Trust Overlay/Module 04 schema initializers
+retain their existing behavior and are outside this guard. Existing production databases are not
+migrated by installing this code; initialization runs only when invoked.
+Relative file paths remain supported. `:memory:` initialization remains ephemeral; sessions and
+failsafe writes do not report those connection-local records as persisted across calls.
+
+### Delivery policy
+
 The opt-in SQL sinks (`logging_sql` for public telemetry, `trust_overlay.sql` for Trust Overlay
 records) queue events in memory and insert them in batches from a background thread. Both share
 one delivery policy, `src/lionlock/utils/sql_batch_writer.py`:

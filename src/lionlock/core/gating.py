@@ -49,6 +49,14 @@ FATIGUE_INPUT_KEYS = (
     "drift_slope",
 )
 
+# Everything score_payload reports missing for a payload with no metadata. decide_gate never
+# receives metadata at all, so it declares the same set, not only the fatigue inputs (LL-0001 R5).
+NO_METADATA_MISSING_INPUTS = (
+    *FATIGUE_INPUT_KEYS,
+    "duration_ms",
+    "latency_window_stats",
+)
+
 TRIGGER_SIGNAL_ORDER = (
     "fatigue_risk_index",
     "congestion_signature",
@@ -229,8 +237,9 @@ def decide_gate(
         # measurement. Declaring those inputs missing keeps the placeholder out of the decision
         # channel and out of trigger attribution. Without this, fatigue_risk_index stayed in the
         # derived map and, being first in TRIGGER_SIGNAL_ORDER, won ties: an all-zero call reported
-        # reason_code "fatigue_risk".
-        missing_inputs=FATIGUE_INPUT_KEYS,
+        # reason_code "fatigue_risk". The non-fatigue inputs are declared too, because this entry
+        # point receives no metadata of any kind; that changes reporting only, not the decision.
+        missing_inputs=NO_METADATA_MISSING_INPUTS,
     )
     return _evaluate_policy_with_scores(
         aggregate=aggregate_score,
