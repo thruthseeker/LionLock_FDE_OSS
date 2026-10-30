@@ -14,6 +14,7 @@ except Exception:
     create_engine = None  # type: ignore[assignment]
     text = None  # type: ignore[assignment]
 
+from lionlock.logging.connection import validate_identifier
 from lionlock.utils.sql_batch_writer import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_RETRY_BACKOFF_MS,
@@ -57,6 +58,7 @@ def _json_or_none(value: Any) -> str | None:
 
 
 def _create_table_sql(table: str, columns: Iterable[Tuple[str, str]]) -> str:
+    validate_identifier(table, "table")
     cols = ", ".join(f"{name} {col_type}" for name, col_type in columns)
     return f"CREATE TABLE IF NOT EXISTS {table} ({cols})"
 
@@ -253,6 +255,9 @@ class TrustOverlaySQLWriter(SQLBatchWriter):
             self.error = f"Trust overlay SQL init failed: {exc}"
 
     def _write_batch(self, records: List[Dict[str, Any]]) -> None:
+        # Re-checked at the INSERT site so that no SQL text in this module is ever built
+        # from an identifier that has not been through validate_identifier.
+        validate_identifier(self.table, "table")
         columns = ",".join(name for name, _ in TRUST_OVERLAY_COLUMNS)
         if self.backend == "sqlite3":
             assert self.sqlite_path is not None
