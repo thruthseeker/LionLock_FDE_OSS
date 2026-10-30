@@ -35,6 +35,9 @@ if [ ! -d "$VENV_PATH" ]; then
   "$pybin" -m venv "$VENV_PATH" || fail "Unable to create venv at $VENV_PATH"
 fi
 
+# Activation and sys.executable use absolute paths, even for a relative override.
+VENV_PATH=$(CDPATH= cd -- "$VENV_PATH" && pwd)
+
 if [ ! -f "$VENV_PATH/bin/activate" ]; then
   fail "Missing activate script at $VENV_PATH/bin/activate"
 fi
