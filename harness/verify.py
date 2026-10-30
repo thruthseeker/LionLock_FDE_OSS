@@ -129,6 +129,36 @@ def _git(*args: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def _git_porcelain() -> tuple[tuple[str, str], ...]:
+    """``git status --porcelain`` as (status, path) pairs.
+
+    Parsed here rather than through ``_git`` because ``_git`` strips the whole output, which eats
+    the leading space of the first line. Porcelain lines are two status characters, a space, then
+    the path, so for an unstaged modification (" M AGENTS.md") that strip shifted every slice by
+    one and ``line[3:]`` yielded "GENTS.md" — a path matching no allowed_paths entry, which the
+    scope check then reported as a violation. Staged and untracked entries begin with a non-space
+    character, so only the first line of certain runs was affected.
+    """
+    result = _run(["git", "status", "--porcelain", "--untracked-files=all"])
+    if result.returncode != 0:
+        return ()
+    return parse_porcelain(result.stdout)
+
+
+def parse_porcelain(output: str) -> tuple[tuple[str, str], ...]:
+    """Parse porcelain text into sorted (status, path) pairs. Pure, so it is directly testable."""
+    entries = []
+    for line in output.splitlines():
+        if len(line) < 4:
+            continue
+        status, path = line[:2], line[3:].strip().strip('"')
+        # Renames read "old -> new"; only the destination matters.
+        path = path.split(" -> ")[-1].strip().strip('"')
+        if path:
+            entries.append((status, path))
+    return tuple(sorted(entries))
+
+
 def _relative(path: str | Path) -> str:
     candidate = Path(path)
     try:
@@ -560,11 +590,8 @@ def _changed_paths(base: str) -> tuple[str, ...]:
     for line in _git("diff", "--name-only", f"{base}..HEAD").splitlines():
         if line.strip():
             changed.add(line.strip())
-    for line in _git("status", "--porcelain", "--untracked-files=all").splitlines():
-        if len(line) > 3:
-            entry = line[3:].strip()
-            # Renames appear as "old -> new"; only the destination matters for scope.
-            changed.add(entry.split(" -> ")[-1].strip().strip('"'))
+    for _status, path in _git_porcelain():
+        changed.add(path)
     return tuple(sorted(path for path in changed if path))
 
 
@@ -665,12 +692,11 @@ def _scan_line(path: str, text: str, *, line_number: int | str = "?") -> list[di
 
 
 def _untracked_text_files() -> tuple[str, ...]:
-    paths = []
-    for line in _git("status", "--porcelain", "--untracked-files=all").splitlines():
-        if line.startswith("??"):
-            candidate = line[3:].strip().strip('"')
-            if candidate and not candidate.endswith("/"):
-                paths.append(candidate)
+    paths = [
+        path
+        for status, path in _git_porcelain()
+        if status == "??" and not path.endswith("/") and (REPO_ROOT / path).is_file()
+    ]
     return tuple(sorted(paths))
 
 
