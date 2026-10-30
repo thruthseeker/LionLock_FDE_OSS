@@ -103,7 +103,9 @@
           <h3>A log that shows tampering</h3>
           <p>
             Decisions you record are appended to a local SQLite file whose rows are
-            hash-chained, so an edited or removed row breaks the chain. Check it yourself:
+            hash-chained, so an edited, reordered or removed row breaks the chain. Rows
+            removed from the very end are the one case a self-contained chain cannot see.
+            Check it yourself:
           </p>
           <pre><code>lionlock-telemetry verify</code></pre>
         </article>
