@@ -13,6 +13,7 @@ from lionlock.core.gating import (
     DEFAULT_THRESHOLDS,
     DERIVED_RISK_KEYS,
     FATIGUE_INPUT_KEYS,
+    METADATA_INPUT_KEYS,
     decide_gate,
     evaluate_policy,
     gating_derived_risk_keys,
@@ -22,6 +23,7 @@ from lionlock.core.scoring import (
     FATIGUE_SIGMOID_BIAS,
     FATIGUE_SIGMOID_GAIN,
     SIGNAL_SCHEMA_VERSION,
+    score_payload,
     score_response,
 )
 
@@ -190,6 +192,28 @@ def test_decide_gate_does_not_attribute_an_all_zero_call_to_fatigue() -> None:
     assert set(FATIGUE_INPUT_KEYS) <= set(decision.signal_bundle["missing_inputs"])
     assert decision.trigger_signal != "fatigue_risk_index"
     assert decision.reason_code != "fatigue_risk"
+
+
+def test_decide_gate_declares_every_metadata_input_it_never_receives() -> None:
+    """decide_gate takes raw scores only, so all five metadata inputs are absent, not just three.
+
+    Declaring only the fatigue three understated what the call was missing. Comparing against
+    score_payload is the point: both entry points must describe a metadata-free call the same way.
+    """
+    probe = score_payload({"prompt": "probe prompt", "response": "probe response"})
+    assert probe is not None
+    assert tuple(probe.missing_inputs) == METADATA_INPUT_KEYS
+
+    zeroed = SignalScores(
+        repetition_loopiness=0.0,
+        novelty_entropy_proxy=0.0,
+        coherence_structure=0.0,
+        context_adherence=0.0,
+        hallucination_risk=0.0,
+    )
+    decision = decide_gate(0.0, zeroed)
+
+    assert tuple(decision.signal_bundle["missing_inputs"]) == METADATA_INPUT_KEYS
 
 
 def test_withheld_fatigue_gating_is_deterministic() -> None:

@@ -49,6 +49,14 @@ FATIGUE_INPUT_KEYS = (
     "drift_slope",
 )
 
+# Every metadata input the scorer can report as missing, in the order score_payload reports them.
+# decide_gate() takes raw signal scores and no metadata at all, so all five are absent on that
+# path, not just the fatigue three.
+METADATA_INPUT_KEYS = FATIGUE_INPUT_KEYS + (
+    "duration_ms",
+    "latency_window_stats",
+)
+
 TRIGGER_SIGNAL_ORDER = (
     "fatigue_risk_index",
     "congestion_signature",
@@ -230,7 +238,7 @@ def decide_gate(
         # channel and out of trigger attribution. Without this, fatigue_risk_index stayed in the
         # derived map and, being first in TRIGGER_SIGNAL_ORDER, won ties: an all-zero call reported
         # reason_code "fatigue_risk".
-        missing_inputs=FATIGUE_INPUT_KEYS,
+        missing_inputs=METADATA_INPUT_KEYS,
     )
     return _evaluate_policy_with_scores(
         aggregate=aggregate_score,
