@@ -31,6 +31,8 @@ def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
     config = load_config()
     config["logging_sql"]["enabled"] = False
     gating_enabled = resolve_gating_enabled(config)
+    gating_cfg = config.get("gating", {})
+    signals_cfg = config.get("signals", {})
     records = load_fixture_sessions(path)
 
     flagged = 0
@@ -44,7 +46,16 @@ def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
         bundle = score_payload(payload)
         if bundle is None:
             continue
-        decision = evaluate_policy(bundle, gating_enabled=gating_enabled)
+        # Every argument that config_hash_from() records has to be passed, or the logged
+        # config_hash describes a policy this call did not use.
+        decision = evaluate_policy(
+            bundle,
+            thresholds=gating_cfg.get("thresholds"),
+            gating_enabled=gating_enabled,
+            hallucination_mode=gating_cfg.get("hallucination_mode", "warn_only"),
+            weights=signals_cfg.get("weights"),
+            enabled_signals=signals_cfg.get("enabled"),
+        )
 
         if decision.gating_decision in {"REFRESH", "BLOCK"}:
             flagged += 1
