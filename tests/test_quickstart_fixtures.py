@@ -44,8 +44,11 @@ def test_quickstart_uses_env_gating_override(monkeypatch) -> None:
 
     seen: list[bool] = []
 
-    def fake_evaluate_policy(bundle, gating_enabled):
+    def fake_evaluate_policy(bundle, gating_enabled, **policy):
         seen.append(bool(gating_enabled))
+        # The quickstart applies the settings that its logged config_hash records.
+        assert set(policy) == {"thresholds", "hallucination_mode", "weights", "enabled_signals"}
+        assert policy["weights"]["repetition_loopiness"] == 0.30
         return _Decision()
 
     monkeypatch.setenv("LIONLOCK_GATING_ENABLED", "false")

@@ -199,8 +199,16 @@ def evaluate_policy(
     gating_enabled: bool = True,
     hallucination_mode: str = "warn_only",
     hard_gate_reasons_enabled: Iterable[str] | None = None,
+    weights: Dict[str, float] | None = None,
+    enabled_signals: list[str] | None = None,
 ) -> GateDecision:
-    aggregate = aggregate_score(bundle)
+    """Gate a scored bundle.
+
+    ``weights`` and ``enabled_signals`` default to ``DEFAULT_SIGNAL_WEIGHTS`` and every signal.
+    Pass a config's ``signals.weights`` / ``signals.enabled`` (and ``gating.thresholds`` /
+    ``gating.hallucination_mode``) so the decision matches the ``config_hash`` you log with it.
+    """
+    aggregate = aggregate_score(bundle, weights=weights, enabled_signals=enabled_signals)
     return _evaluate_policy_with_scores(
         aggregate=aggregate,
         signal_scores=bundle.signal_scores,
