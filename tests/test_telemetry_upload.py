@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from lionlock.logging.token_auth import hash_token
+from lionlock.telemetry import receiver as receiver_module
 from lionlock.telemetry import snapshot as snapshot_module
 from lionlock.telemetry import upload as upload_module
 from lionlock.telemetry.export import export_snapshot, pending_snapshots
@@ -574,3 +575,27 @@ def test_receiver_refuses_a_warehouse_with_an_older_layout(tmp_path) -> None:
     Receiver(ReceiverConfig(data_dir=fresh))
     with sqlite3.connect(fresh / "warehouse.db") as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == WAREHOUSE_SCHEMA_VERSION
+
+
+def test_a_resent_snapshot_counts_toward_the_rate_limit(tmp_path) -> None:
+    """A duplicate is not free: it costs a gunzip, a SHA-256, and a re-read of the evidence."""
+    receiver = Receiver(ReceiverConfig(data_dir=tmp_path / "server", uploads_per_hour=2))
+    path = _exported(tmp_path / "a")
+    headers, body = _upload_headers(path), path.read_bytes()
+
+    assert receiver.handle_upload(headers, body).status == 201
+    assert receiver.handle_upload(headers, body).status == 200
+    assert receiver.handle_upload(headers, body).status == 429
+
+
+def test_one_client_cycling_keys_does_not_reset_another_budget(tmp_path, monkeypatch) -> None:
+    """The bucket table used to be cleared wholesale once it grew past its cap."""
+    monkeypatch.setattr(receiver_module, "_RATE_KEYS_MAX", 4)
+    receiver = Receiver(ReceiverConfig(data_dir=tmp_path / "server", uploads_per_hour=1))
+    victim = _exported(tmp_path / "victim")
+
+    assert receiver.handle_upload(_upload_headers(victim), victim.read_bytes()).status == 201
+    for index in range(20):
+        receiver._within_rate(f"install:{index:032x}")
+
+    assert receiver.handle_upload(_upload_headers(victim), victim.read_bytes()).status == 429

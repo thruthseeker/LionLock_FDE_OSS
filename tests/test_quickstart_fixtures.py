@@ -44,7 +44,9 @@ def test_quickstart_uses_env_gating_override(monkeypatch) -> None:
 
     seen: list[bool] = []
 
-    def fake_evaluate_policy(bundle, gating_enabled):
+    def fake_evaluate_policy(bundle, gating_enabled, **kwargs):
+        # **kwargs so this double does not pin evaluate_policy's signature; the test is
+        # about the gating override reaching the call.
         seen.append(bool(gating_enabled))
         return _Decision()
 

@@ -1,3 +1,6 @@
+import pytest
+
+from lionlock.logging import event_log, privacy
 from lionlock.logging.privacy import (
     contains_forbidden_content,
     contains_forbidden_keys,
@@ -39,3 +42,25 @@ def test_value_scan_flags_large_free_text() -> None:
 def test_value_scan_allows_non_marker_strings() -> None:
     payload = {"status": "prompt_injection_suspected"}
     assert contains_forbidden_content(payload) is False
+
+
+def test_the_two_forbidden_key_lists_cannot_drift_apart() -> None:
+    """They were separate literals and had drifted by ten keys."""
+    assert event_log.FORBIDDEN_KEYS is privacy.FORBIDDEN_PAYLOAD_KEYS
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["assistant_response", "completion", "content", "input", "output", "tool_calls"],
+)
+def test_keys_only_the_event_log_knew_are_now_scrubbed_everywhere(key: str) -> None:
+    """These reach the anomaly SQL path, which scrubs with FORBIDDEN_PAYLOAD_KEYS."""
+    assert contains_forbidden_keys({key: "secret"}) is True
+
+    ok, cleaned, message = scrub_forbidden_keys({key: "secret"}, mode="reject")
+    assert ok is False
+    assert message and key in message
+
+    ok, cleaned, _ = scrub_forbidden_keys({key: "secret", "keep": 1}, mode="strip")
+    assert ok is True
+    assert cleaned == {"keep": 1}

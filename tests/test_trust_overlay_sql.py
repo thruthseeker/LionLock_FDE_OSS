@@ -8,7 +8,13 @@ import pytest
 
 from lionlock.trust_overlay.logger import append_trust_record, build_trust_record
 from lionlock.trust_overlay.schemas import EXACT_BANNED_KEYS
-from lionlock.trust_overlay.sql_sink import TRUST_OVERLAY_COLUMNS, get_writer, stop_writer
+from lionlock.trust_overlay.sql_sink import (
+    TRUST_OVERLAY_COLUMNS,
+    enqueue_record,
+    get_writer,
+    init_db,
+    stop_writer,
+)
 
 
 def _build_record(config: dict | None = None) -> dict:
@@ -194,3 +200,36 @@ def test_trust_overlay_stop_writer_flushes_and_joins(tmp_path: Path) -> None:
     assert writer.thread is not None and not writer.thread.is_alive()
     assert final is not None
     assert (final["written"], final["dropped"], final["failed"], final["pending"]) == (3, 0, 0, 0)
+
+
+def test_a_table_name_from_config_cannot_carry_sql(tmp_path) -> None:
+    """The Trust Overlay sink was the last SQL sink to interpolate a config table name.
+
+    Every other sink in the library runs the name through ``validate_identifier`` first.
+    On SQLite the driver refuses a second statement on its own, so what this buys there is a
+    diagnosable error instead of "You can only execute one statement at a time"; on a backend
+    whose driver does permit multiple statements, it is the thing standing in the way.
+    """
+    db_path = tmp_path / "overlay.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE victim (x INTEGER)")
+        conn.execute("INSERT INTO victim (x) VALUES (1)")
+        conn.commit()
+
+    config = _build_sql_config(db_path, enabled=True)
+    sql_cfg = config["trust_overlay"]["sql"]
+    sql_cfg["table"] = "t (x int); DROP TABLE victim; --"
+
+    ok, message = init_db(sql_cfg)
+    assert ok is False
+    assert "Invalid SQL identifier" in message
+
+    try:
+        # Fails closed: no writer, and nothing is accepted for logging.
+        assert get_writer(sql_cfg) is None
+        assert enqueue_record(sql_cfg, _build_record()) is False
+    finally:
+        stop_writer()
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT x FROM victim").fetchall() == [(1,)]

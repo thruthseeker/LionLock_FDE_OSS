@@ -51,7 +51,7 @@ Python 3.10+ and Git; use a fresh virtual environment. It installs the library a
 (`lionlock-telemetry` and `lionlock-sim`):
 
 ```bash
-python -m pip install "lionlock @ git+https://github.com/thruthseeker/LionLock_FDE_OSS.git@05434565c96a9534494110cf048caad804dc343d"
+python -m pip install "lionlock @ git+https://github.com/trustseeker/LionLock_FDE_OSS.git@05434565c96a9534494110cf048caad804dc343d"
 python -c "from importlib.metadata import version; print(version('lionlock'))"
 ```
 
@@ -84,7 +84,7 @@ print(decision.severity, decision.gating_decision, decision.reason_code)
 For the quickstart with sample sessions, the tests, and the developer tools, clone the repository:
 
 ```bash
-git clone https://github.com/thruthseeker/LionLock_FDE_OSS.git
+git clone https://github.com/trustseeker/LionLock_FDE_OSS.git
 cd LionLock_FDE_OSS
 bash tools/dev_setup.sh
 ```

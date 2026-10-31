@@ -1,7 +1,10 @@
 import math
 
+import pytest
+
 from lionlock.core import evaluate_policy
 from lionlock.core.models import DerivedSignals, SignalBundle, SignalScores
+from lionlock.core.scoring import DEFAULT_SIGNAL_WEIGHTS, aggregate_score
 
 
 def _bundle(
@@ -60,3 +63,38 @@ def test_evaluate_policy_trigger_signal_deterministic() -> None:
     second = evaluate_policy(bundle).trigger_signal
     assert first == second
     assert first
+
+
+def test_evaluate_policy_applies_configured_weights() -> None:
+    """config_hash_from() records signals.weights, so evaluate_policy has to be able to
+    apply them. It could not: it always used DEFAULT_SIGNAL_WEIGHTS, so an operator who
+    tuned a weight got unchanged decisions and a config_hash claiming the tuned policy.
+
+    Asserted on aggregate_score rather than decision_risk_score, which is
+    max(aggregate, derived risks) and can be dominated by a derived signal.
+    """
+    bundle = _bundle(hallucination=0.9)
+    tuned = {**DEFAULT_SIGNAL_WEIGHTS, "hallucination_risk": 0.95}
+
+    default_decision = evaluate_policy(bundle)
+    tuned_decision = evaluate_policy(bundle, weights=tuned)
+
+    assert default_decision.aggregate_score == pytest.approx(aggregate_score(bundle))
+    assert tuned_decision.aggregate_score == pytest.approx(aggregate_score(bundle, tuned))
+    assert tuned_decision.aggregate_score > default_decision.aggregate_score
+
+
+def test_evaluate_policy_is_unchanged_when_the_new_arguments_are_omitted() -> None:
+    """The arguments are additive: omitting them must behave exactly as before."""
+    bundle = _bundle(hallucination=0.9)
+
+    omitted = evaluate_policy(bundle)
+    explicit = evaluate_policy(
+        bundle,
+        weights=dict(DEFAULT_SIGNAL_WEIGHTS),
+        enabled_signals=list(DEFAULT_SIGNAL_WEIGHTS),
+    )
+
+    assert omitted.aggregate_score == pytest.approx(explicit.aggregate_score)
+    assert omitted.gating_decision == explicit.gating_decision
+    assert omitted.decision_risk_score == pytest.approx(explicit.decision_risk_score)

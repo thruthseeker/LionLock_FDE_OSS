@@ -245,7 +245,7 @@ The token helper is a repository script, not an installed CLI. Obtain the same p
 revision in a separate directory before running it from your activated LionLock environment:
 
 ```bash
-git clone --no-checkout https://github.com/thruthseeker/LionLock_FDE_OSS.git LionLock-token-tools
+git clone --no-checkout https://github.com/trustseeker/LionLock_FDE_OSS.git LionLock-token-tools
 git -C LionLock-token-tools checkout --detach 05434565c96a9534494110cf048caad804dc343d
 python LionLock-token-tools/scripts/log_token_tool.py generate --token-path upload.token --hashes-path token_hashes.txt
 lionlock-telemetry serve --data-dir /var/lib/lionlock-telemetry --token-hashes-file token_hashes.txt

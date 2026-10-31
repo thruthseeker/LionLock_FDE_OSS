@@ -12,13 +12,29 @@ _DEFAULT_ADMIN_USER = "lionlock_admin"
 _DEFAULT_WRITER_USER = "lionlock_writer"
 _DEFAULT_PORT = 25060
 
-_ENV_DB_HOST_KEYS = ("LIONLOCK_TELEMETRY_DB_HOST", "LIONLOCK_DB_HOST", "HOST")
-_ENV_DB_PORT_KEYS = ("LIONLOCK_TELEMETRY_DB_PORT", "LIONLOCK_DB_PORT", "PORT")
+# Deliberately no bare HOST/PORT fallback: on most PaaS those name the port the app itself
+# listens on, so treating them as a database address sends the DB credentials elsewhere.
+_ENV_DB_HOST_KEYS = ("LIONLOCK_TELEMETRY_DB_HOST", "LIONLOCK_DB_HOST")
+_ENV_DB_PORT_KEYS = ("LIONLOCK_TELEMETRY_DB_PORT", "LIONLOCK_DB_PORT")
 _ENV_DB_NAME_KEYS = ("LIONLOCK_TELEMETRY_DB_NAME", "LIONLOCK_DB_NAME")
 _ENV_SSLMODE_KEYS_ADMIN = ("LIONLOCK_SSLMODE",)
 _ENV_SSLMODE_KEYS_TELEMETRY = ("LIONLOCK_TELEMETRY_SSLMODE", "LIONLOCK_SSLMODE")
 _ENV_SSLROOTCERT_KEYS_ADMIN = ("LIONLOCK_SSLROOTCERT",)
 _ENV_SSLROOTCERT_KEYS_TELEMETRY = ("LIONLOCK_TELEMETRY_SSLROOTCERT", "LIONLOCK_SSLROOTCERT")
+
+
+# A .env file may set the variables this library reads, and nothing else. os.environ is
+# inherited by every subprocess, so letting a file in the working directory set PATH or
+# LD_PRELOAD would hand it a great deal more than configuration.
+_DOTENV_PREFIX = "LIONLOCK_"
+_DOTENV_EXTRA_KEYS = frozenset(
+    {"DO_NOT_TRACK", "TRUST_OVERLAY_SALT", "CONTAINER_ID", "HOSTNAME"}
+)
+
+
+def dotenv_key_allowed(key: str) -> bool:
+    """True when ``key`` is one this library reads, so a .env file may set it."""
+    return key.startswith(_DOTENV_PREFIX) or key in _DOTENV_EXTRA_KEYS
 
 
 def validate_identifier(name: str, label: str) -> None:
@@ -52,7 +68,7 @@ def _read_env_lines(lines: Iterable[str]) -> None:
             continue
         key, value = stripped.split("=", 1)
         key = key.strip()
-        if not key or key in os.environ:
+        if not key or key in os.environ or not dotenv_key_allowed(key):
             continue
         value = value.strip()
         if value and value[0] == value[-1] and value[0] in {"'", '"'}:

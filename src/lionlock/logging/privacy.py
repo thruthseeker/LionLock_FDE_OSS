@@ -2,25 +2,36 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+# One canonical list, shared by every sink. ``event_log.FORBIDDEN_KEYS`` is an alias of it.
+# The two used to be maintained separately and had drifted: this set was missing ten of the
+# keys event_log listed, so a payload carrying "content", "system_prompt", "completion",
+# "tool_calls", "input" or "output" was scrubbed on the public telemetry path and kept on
+# the anomaly SQL path, which scrubs with this one.
 FORBIDDEN_PAYLOAD_KEYS = {
-    "prompt",
-    "response",
-    "prompt_text",
-    "response_text",
-    "messages",
-    "payload_b64",
-    "user_id",
-    "ip",
-    "device_id",
-}
-
-FORBIDDEN_VALUE_TOKENS = FORBIDDEN_PAYLOAD_KEYS | {
     "assistant_response",
+    "completion",
+    "content",
+    "device_id",
+    "input",
+    "ip",
+    "messages",
+    "output",
+    "payload_b64",
+    "prompt",
+    "prompt_text",
     "raw_messages",
     "raw_text",
+    "response",
+    "response_text",
     "system_prompt",
+    "tool_calls",
+    "user_id",
     "user_prompt",
 }
+
+# Same names, matched differently: keys are compared exactly, value tokens are looked for as
+# "<token>:" or "<token>=" markers inside a string.
+FORBIDDEN_VALUE_TOKENS = set(FORBIDDEN_PAYLOAD_KEYS)
 
 DEFAULT_VALUE_SCAN_MAX_CHARS = 500
 
