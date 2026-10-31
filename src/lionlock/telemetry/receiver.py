@@ -55,6 +55,8 @@ _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024
 DEFAULT_UPLOADS_PER_HOUR = 120
+# Upper bound on tracked rate-limit buckets, so the table cannot grow without limit.
+_RATE_KEYS_MAX = 100_000
 DEFAULT_MAX_CONCURRENT_UPLOADS = 4
 
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
@@ -369,13 +371,16 @@ class Receiver:
         install_id = lowered.get("x-lionlock-install-id", "").strip().lower()
         if not _HEX32.fullmatch(install_id):
             return _error(400, "missing or malformed X-LionLock-Install-Id")
+        # Metered before the duplicate check below. A resend is not free: it has already cost
+        # a gunzip of up to the size limit and a SHA-256, and the duplicate path then re-reads
+        # and re-hashes the stored evidence. Counting it after that left all of it unmetered.
+        if not self._within_rate(self._rate_key(lowered, install_id)):
+            return _error(429, "upload rate limit exceeded", {"Retry-After": "3600"})
         recorded = self._stored_sha_for(received_sha)
         if recorded is not None:
             if not self._evidence_intact(recorded):
                 return self._evidence_failure()
             return IngestResult(200, {"status": "duplicate", "file_sha256": received_sha})
-        if not self._within_rate(self._rate_key(lowered, install_id)):
-            return _error(429, "upload rate limit exceeded", {"Retry-After": "3600"})
 
         try:
             info = validate_snapshot_bytes(data, max_bytes=limit, work_dir=self.quarantine_dir)
@@ -430,13 +435,20 @@ class Receiver:
             return True
         hour = int(time.time() // 3600)
         with self._rate_lock:
-            if len(self._rate) > 100_000:
-                self._rate.clear()
             bucket_hour, count = self._rate.get(key, (hour, 0))
             if bucket_hour != hour:
                 count = 0
             if count >= self.config.uploads_per_hour:
                 return False
+            if key not in self._rate and len(self._rate) >= _RATE_KEYS_MAX:
+                # Drop only buckets that have rolled over. Clearing the whole table handed
+                # every other client a fresh budget, so one client cycling install ids reset
+                # everyone -- including clients counted by token.
+                self._rate = {
+                    tracked: bucket for tracked, bucket in self._rate.items() if bucket[0] == hour
+                }
+                if len(self._rate) >= _RATE_KEYS_MAX:
+                    return False
             self._rate[key] = (hour, count + 1)
         return True
 
