@@ -253,14 +253,19 @@ _VERIFIER_CACHE_LOCK = threading.Lock()
 
 def _verifier_cache_key(cfg: Dict[str, Any]) -> str:
     path = cfg.get("token_hashes_path")
+    stamp: tuple[int, int, int] | None = None
     try:
-        stamp = Path(path).stat().st_mtime_ns if isinstance(path, str) and path.strip() else None
+        if isinstance(path, str) and path.strip():
+            info = Path(path).stat()
+            # Inode and ctime too: a replacement that restores the old mtime (cp -p, rsync -a)
+            # must still invalidate the cached allowlist.
+            stamp = (info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
     except OSError:
         stamp = None
     return json.dumps(
         {
             "cfg": cfg,
-            "hashes_file_mtime": stamp,
+            "hashes_file_stat": stamp,
             "env_hashes": os.getenv("LIONLOCK_LOG_TOKEN_HASHES", ""),
             "env_db_uri": os.getenv("LIONLOCK_LOG_TOKEN_DB_URI", ""),
         },

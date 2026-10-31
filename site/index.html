@@ -104,8 +104,8 @@
           <p>
             Decisions you record are appended to a local SQLite file whose rows are
             hash-chained, so an edited, reordered or removed row breaks the chain. Rows
-            removed from the very end are the one case a self-contained chain cannot see.
-            Check it yourself:
+            removed from the very end, and a whole log rewritten with recomputed hashes,
+            are not detected by the chain alone. Check it yourself:
           </p>
           <pre><code>lionlock-telemetry verify</code></pre>
         </article>

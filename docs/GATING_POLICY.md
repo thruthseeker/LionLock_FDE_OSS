@@ -29,6 +29,9 @@ The OSS library returns a `GateDecision` object. Real-time interruption depends 
 ## Config templates
 
 - TOML template: [`lionlock.toml.example`](../lionlock.toml.example)
-- Env template: [`.env.example`](../.env.example)
+- Env template, for database connection settings only: [`.env.example`](../.env.example)
 
-Copy these into your local runtime files (`lionlock.toml` and `.env`) and adjust as needed.
+Set gating in `lionlock.toml` (`[gating] enabled = true|false`) or by exporting
+`LIONLOCK_GATING_ENABLED` in the process's real environment. A `.env` file that LionLock finds by
+itself supplies database connection settings only; a `LIONLOCK_GATING_ENABLED` line in it is
+ignored, so a file in an untrusted checkout cannot switch gating off.

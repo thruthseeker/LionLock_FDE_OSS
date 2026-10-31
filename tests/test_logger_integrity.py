@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import os
 import threading
 from pathlib import Path
 
@@ -19,6 +20,7 @@ def _write_many(path: str, tag: str, count: int) -> None:
         logger.record(event="detect", payload={"writer": tag, "n": index})
 
 
+@pytest.mark.skipif(os.name != "posix", reason="cross-process appends are serialized only on POSIX")
 def test_concurrent_threads_and_processes_keep_one_valid_chain(tmp_path: Path) -> None:
     path = tmp_path / "trustvault.log"
     threads = [
@@ -114,3 +116,22 @@ def test_a_fully_rewritten_log_is_caught_against_a_recorded_head(tmp_path: Path)
 def test_head_of_an_empty_or_missing_log(tmp_path: Path) -> None:
     logger = TrustVaultLogger(tmp_path / "none.log")
     assert logger.head() == (0, GENESIS_HASH)
+
+
+def test_trailing_whitespace_lines_do_not_restart_the_chain(tmp_path: Path) -> None:
+    path = tmp_path / "trustvault.log"
+    logger = TrustVaultLogger(path)
+    logger.record(event="detect", payload={"n": 1})
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("   \n\t\n")
+    logger.record(event="detect", payload={"n": 2})
+    logger.verify_chain()
+    assert logger.head()[0] == 2
+
+
+def test_a_never_written_log_verifies_against_its_own_empty_head(tmp_path: Path) -> None:
+    logger = TrustVaultLogger(tmp_path / "never.log")
+    count, head = logger.head()
+    logger.verify_chain(expected_head=head, expected_count=count)
+    with pytest.raises(TamperDetectedError):
+        logger.verify_chain(expected_count=3)

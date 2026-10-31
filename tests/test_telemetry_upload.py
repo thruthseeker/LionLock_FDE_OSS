@@ -601,5 +601,18 @@ def test_a_full_rate_table_keeps_current_budgets_instead_of_resetting_them(
 
     hour = int(receiver_module.time.time() // 3600)
     receiver._rate = {key: (hour - 1, 1) for key in receiver._rate}
+    receiver._rate_pruned_hour = hour - 1  # simulate the hour having turned since the last prune
     # Buckets from an earlier hour are dropped to make room.
     assert receiver._within_rate("install:d")
+
+
+def test_a_full_rate_table_is_pruned_at_most_once_per_hour(tmp_path, monkeypatch) -> None:
+    from lionlock.telemetry import receiver as receiver_module
+
+    monkeypatch.setattr(receiver_module, "_RATE_KEYS_MAX", 2)
+    receiver = Receiver(ReceiverConfig(data_dir=tmp_path / "server", uploads_per_hour=5))
+    assert receiver._within_rate("install:a") and receiver._within_rate("install:b")
+    assert not receiver._within_rate("install:c")
+    table = receiver._rate
+    assert not receiver._within_rate("install:d")
+    assert receiver._rate is table  # not rebuilt again within the same hour

@@ -89,7 +89,7 @@ cd LionLock_FDE_OSS
 bash tools/dev_setup.sh
 ```
 
-Config templates: [`lionlock.toml.example`](lionlock.toml.example) and [`.env.example`](.env.example).
+Config templates: [`lionlock.toml.example`](lionlock.toml.example) and, for database connection settings only, [`.env.example`](.env.example). Gating is set in `lionlock.toml` or the real environment, never by a `.env` file.
 
 Five-minute walkthrough: [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
 

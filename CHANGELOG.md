@@ -44,7 +44,11 @@ From a full review of `src/` after the move to fully open source. Each fix has a
 - Deployments that relied on environment credentials alone to turn on SQL telemetry must set
   `logging_sql.enabled = true` (and `logging.backend = "sql"` or `"both"`).
 - Settings other than database connection settings must come from the real environment or an
-  explicit `load_dotenv(path)`, not from an implicitly found `.env`.
+  explicit `load_dotenv(path)`, not from an implicitly found `.env`. In particular a
+  `LIONLOCK_GATING_ENABLED` line in `.env` is now ignored: set `[gating] enabled` in
+  `lionlock.toml`, or export the variable. This also removes an inconsistency where the first
+  `load_config()` ignored `.env` and a later one, after a database DSN was built, applied it.
+  `.env.example` is now a database-settings template.
 - Calling the LLM connector with an API key over plain http to a non-local host now fails with
   `insecure_endpoint_for_api_key`; use https.
 - A `TrustVaultLogger` file whose last line is damaged must be inspected (and repaired) before new
