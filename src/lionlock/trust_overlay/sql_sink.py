@@ -14,6 +14,7 @@ except Exception:
     create_engine = None  # type: ignore[assignment]
     text = None  # type: ignore[assignment]
 
+from lionlock.logging.connection import validate_identifier
 from lionlock.utils.sql_batch_writer import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_RETRY_BACKOFF_MS,
@@ -57,6 +58,7 @@ def _json_or_none(value: Any) -> str | None:
 
 
 def _create_table_sql(table: str, columns: Iterable[Tuple[str, str]]) -> str:
+    validate_identifier(table, "trust_overlay.sql.table")
     cols = ", ".join(f"{name} {col_type}" for name, col_type in columns)
     return f"CREATE TABLE IF NOT EXISTS {table} ({cols})"
 
@@ -204,6 +206,9 @@ class TrustOverlaySQLWriter(SQLBatchWriter):
         retry_backoff_ms: int = DEFAULT_RETRY_BACKOFF_MS,
         stop_timeout_s: float = DEFAULT_STOP_TIMEOUT_S,
     ) -> None:
+        # The table name is interpolated into SQL; only a plain identifier is accepted. Checked
+        # before the base writer starts anything.
+        validate_identifier(table, "trust_overlay.sql.table")
         super().__init__(
             batch_size=batch_size,
             flush_interval_ms=flush_interval_ms,

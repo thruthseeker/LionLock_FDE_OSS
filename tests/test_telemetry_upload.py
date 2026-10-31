@@ -574,3 +574,32 @@ def test_receiver_refuses_a_warehouse_with_an_older_layout(tmp_path) -> None:
     Receiver(ReceiverConfig(data_dir=fresh))
     with sqlite3.connect(fresh / "warehouse.db") as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == WAREHOUSE_SCHEMA_VERSION
+
+
+def test_resending_identical_bytes_counts_against_the_rate_limit(tmp_path) -> None:
+    receiver = Receiver(ReceiverConfig(data_dir=tmp_path / "server", uploads_per_hour=2))
+    snapshot = _exported(tmp_path / "a")
+    headers, body = _upload_headers(snapshot), snapshot.read_bytes()
+
+    statuses = [receiver.handle_upload(headers, body).status for _ in range(3)]
+    assert statuses == [201, 200, 429]
+
+
+def test_a_full_rate_table_keeps_current_budgets_instead_of_resetting_them(
+    tmp_path, monkeypatch
+) -> None:
+    from lionlock.telemetry import receiver as receiver_module
+
+    monkeypatch.setattr(receiver_module, "_RATE_KEYS_MAX", 3)
+    receiver = Receiver(ReceiverConfig(data_dir=tmp_path / "server", uploads_per_hour=1))
+    for key in ("install:a", "install:b", "install:c"):
+        assert receiver._within_rate(key)
+    # A fourth client cannot get in by overflowing the table...
+    assert not receiver._within_rate("install:d")
+    # ...and the clients already counted keep their spent budget.
+    assert not receiver._within_rate("install:a")
+
+    hour = int(receiver_module.time.time() // 3600)
+    receiver._rate = {key: (hour - 1, 1) for key in receiver._rate}
+    # Buckets from an earlier hour are dropped to make room.
+    assert receiver._within_rate("install:d")
