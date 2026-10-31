@@ -6,7 +6,7 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict
 
-from lionlock.logging.connection import build_postgres_dsn
+from lionlock.logging.connection import build_postgres_dsn, load_dotenv
 try:
     import tomllib  # py>=3.11
 except ModuleNotFoundError:  # pragma: no cover - fallback for older runtimes
@@ -204,17 +204,31 @@ def resolve_gating_enabled(config: Dict[str, Any]) -> bool:
 
 
 def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
-    """Load config with safe defaults; missing files are non-fatal."""
+    """Load config with safe defaults.
+
+    A missing file is non-fatal. A file that exists but will not parse is fatal: falling back
+    to defaults there would silently turn off token auth and failsafe and discard custom
+    gating thresholds, leaving the operator with no sign that none of it took effect.
+    """
     config = copy.deepcopy(DEFAULT_CONFIG)
     config_path = Path(path)
+    raw: Any = None
     if config_path.exists():
         try:
             with config_path.open("rb") as handle:
                 raw = tomllib.load(handle)
-        except Exception:
-            raw = None
+        except tomllib.TOMLDecodeError as exc:
+            raise RuntimeError(f"{config_path} is not valid TOML: {exc}") from exc
+        except OSError as exc:
+            raise RuntimeError(f"{config_path} could not be read: {exc}") from exc
         if isinstance(raw, dict):
             config = _merge_dict(config, raw)
+
+    # Load .env before anything reads the environment. It used to arrive as a side effect of
+    # build_postgres_dsn() further down, which left the documented LIONLOCK_GATING_ENABLED
+    # override ignored on the first load_config() of a process and honoured on every one
+    # after it -- the same inputs giving two different gating decisions.
+    load_dotenv()
 
     config.setdefault("gating", {})
     config["gating"]["enabled"] = resolve_gating_enabled(config)
@@ -234,13 +248,20 @@ def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
             telemetry_db_uri = ""
     if telemetry_db_uri:
         sql_cfg["uri"] = telemetry_db_uri
-        sql_cfg["token"] = telemetry_db_uri
-        sql_cfg["enabled"] = True
+        # A DSN found in the environment is a usable target, not an instruction to start
+        # publishing. An operator who wrote logging_sql.enabled = false meant it.
+        raw_sql = raw.get("logging_sql") if isinstance(raw, dict) else None
+        if not (isinstance(raw_sql, dict) and "enabled" in raw_sql):
+            sql_cfg["enabled"] = True
     backend = str(logging_cfg.get("backend") or "sqlite").lower()
     if sql_cfg.get("enabled") and backend not in {"sql", "both"}:
         raise RuntimeError("SQL telemetry requires logging.backend to be 'sql' or 'both'.")
-    if sql_cfg.get("enabled") and not str(sql_cfg.get("token", "")).strip():
-        raise RuntimeError("logging_sql.token is required when SQL telemetry is enabled.")
+    if sql_cfg.get("enabled") and not (
+        str(sql_cfg.get("token", "")).strip() or str(sql_cfg.get("uri", "")).strip()
+    ):
+        raise RuntimeError(
+            "logging_sql.token or logging_sql.uri is required when SQL telemetry is enabled."
+        )
     if sql_cfg.get("enabled") and logging_cfg.get("content_policy") != "signals_only":
         logging_cfg["content_policy"] = "signals_only"
         warnings.warn(
