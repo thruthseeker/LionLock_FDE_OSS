@@ -9,7 +9,7 @@ updates:
       time: "03:00"
     open-pull-requests-limit: 5
     reviewers:
-      - "thruthseeker"
+      - "trustseeker"
     # Only auto-merge minor and patch updates, not major versions
     allow:
       - dependency-type: "all"

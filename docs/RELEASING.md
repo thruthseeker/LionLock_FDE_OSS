@@ -27,9 +27,16 @@ provides an immutable source-install command while publication is pending.
    `importlib.metadata.version('lionlock')`. Use synthetic databases for preservation and receiver
    tests; never run release validation against a tester's existing telemetry data.
 6. Confirm the actual GitHub `pypi` environment still requires a maintainer reviewer, and that
-   PyPI's Trusted Publisher configuration matches owner `thruthseeker`, repository
-   `LionLock_FDE_OSS`, workflow `publish.yml`, and environment `pypi`. Workflow comments alone
-   do not establish those settings. Do not replace Trusted Publishing with an API token.
+   PyPI's Trusted Publisher configuration matches the repository's **current** owner
+   `trustseeker`, repository `LionLock_FDE_OSS`, workflow `publish.yml`, and environment
+   `pypi`. Workflow comments alone do not establish those settings. Do not replace Trusted
+   Publishing with an API token.
+
+   This step previously named owner `thruthseeker`, which the account no longer uses. GitHub
+   redirects the old owner for web and git traffic, so clones and links keep working and the
+   rename is easy to miss, but Trusted Publishing matches the OIDC `repository_owner` claim
+   exactly and does not follow a rename. A configuration still naming the old owner rejects
+   the upload after the release has already been published. Check PyPI before tagging.
 
 ## Publish through the existing workflow
 

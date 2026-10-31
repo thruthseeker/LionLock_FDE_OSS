@@ -23,10 +23,10 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/thruthseeker/LionLock_FDE_OSS"
-Source = "https://github.com/thruthseeker/LionLock_FDE_OSS"
-Changelog = "https://github.com/thruthseeker/LionLock_FDE_OSS/blob/main/CHANGELOG.md"
-Issues = "https://github.com/thruthseeker/LionLock_FDE_OSS/issues"
+Homepage = "https://github.com/trustseeker/LionLock_FDE_OSS"
+Source = "https://github.com/trustseeker/LionLock_FDE_OSS"
+Changelog = "https://github.com/trustseeker/LionLock_FDE_OSS/blob/main/CHANGELOG.md"
+Issues = "https://github.com/trustseeker/LionLock_FDE_OSS/issues"
 
 [project.optional-dependencies]
 dev = [
