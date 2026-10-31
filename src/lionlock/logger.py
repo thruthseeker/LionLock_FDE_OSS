@@ -47,9 +47,10 @@ def _last_line(handle: IO[bytes]) -> bytes:
         position -= step
         handle.seek(position)
         data = handle.read(step) + data
-        if data.rstrip(b"\n").count(b"\n") >= 1:
+        # Trailing whitespace-only lines are not entries; skip them as the original reader did.
+        if data.rstrip().count(b"\n") >= 1:
             break
-    return data.rstrip(b"\n").rsplit(b"\n", 1)[-1]
+    return data.rstrip().rsplit(b"\n", 1)[-1]
 
 
 class TrustVaultLogger:
@@ -106,7 +107,8 @@ class TrustVaultLogger:
         count = 0
         last = GENESIS_HASH
         if self.path.exists():
-            with self.path.open("rb") as handle:
+            # Under the append lock, so count and hash describe one state of the file.
+            with self.path.open("rb") as handle, _locked(handle):
                 for line in handle:
                     if line.strip():
                         count += 1
@@ -121,6 +123,9 @@ class TrustVaultLogger:
         A self-contained hash chain cannot tell that its newest entries were removed. Pass a
         ``head()`` recorded elsewhere as ``expected_head``/``expected_count`` to detect that too.
         """
+        if not self.path.exists() and expected_count == 0 and expected_head in (None, GENESIS_HASH):
+            # head() of a log that was never written is (0, GENESIS_HASH); that state verifies.
+            return
         verify_chain_file(self.path, expected_head=expected_head, expected_count=expected_count)
 
     def flush(self) -> None:

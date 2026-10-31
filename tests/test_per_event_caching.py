@@ -49,3 +49,23 @@ def test_an_unchanged_dotenv_is_read_once(tmp_path: Path, monkeypatch: pytest.Mo
         assert connection.load_dotenv(env_file) is True
     assert len(reads) == 1
     monkeypatch.delenv("LIONLOCK_DB_NAME_UNUSED", raising=False)
+
+
+def test_replacing_the_hash_file_with_the_same_mtime_invalidates_the_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    monkeypatch.delenv("LIONLOCK_LOG_TOKEN_HASHES", raising=False)
+    monkeypatch.delenv("LIONLOCK_LOG_TOKEN_DB_URI", raising=False)
+    hashes = tmp_path / "hashes.txt"
+    hashes.write_text("a" * 64 + "\n")
+    cfg = {"enabled": True, "token_hashes_path": str(hashes)}
+    first = token_auth._verifier_cache_key(cfg)
+    stat = hashes.stat()
+    replacement = tmp_path / "new.txt"
+    replacement.write_text("b" * 64 + "\n")
+    os.utime(replacement, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    os.replace(replacement, hashes)  # same mtime, like cp -p or rsync -a
+    assert hashes.stat().st_mtime_ns == stat.st_mtime_ns
+    assert token_auth._verifier_cache_key(cfg) != first

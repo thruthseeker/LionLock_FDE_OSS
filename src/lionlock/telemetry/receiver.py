@@ -326,6 +326,7 @@ class Receiver:
         self._ingest_lock = threading.Lock()
         self._rate_lock = threading.Lock()
         self._rate: Dict[str, Tuple[int, int]] = {}
+        self._rate_pruned_hour = -1
         self._slots = threading.BoundedSemaphore(max(1, config.max_concurrent_uploads))
 
     def authorize(self, header: str | None) -> bool:
@@ -434,9 +435,12 @@ class Receiver:
         hour = int(time.time() // 3600)
         with self._rate_lock:
             if len(self._rate) >= _RATE_KEYS_MAX and key not in self._rate:
-                # Drop only buckets from earlier hours. Clearing everything would hand every
-                # client a fresh budget to anyone who cycles through enough install ids.
-                self._rate = {k: v for k, v in self._rate.items() if v[0] == hour}
+                # Drop only buckets from earlier hours, at most once per hour so a full table is
+                # not rescanned on every refused key. Clearing everything would hand every client
+                # a fresh budget to anyone who cycles through enough install ids.
+                if self._rate_pruned_hour != hour:
+                    self._rate = {k: v for k, v in self._rate.items() if v[0] == hour}
+                    self._rate_pruned_hour = hour
                 if len(self._rate) >= _RATE_KEYS_MAX:
                     return False
             bucket_hour, count = self._rate.get(key, (hour, 0))
