@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Set
 
 from . import sql_telemetry
-from .privacy import find_forbidden_content, scrub_forbidden_keys
+from .privacy import FORBIDDEN_PAYLOAD_KEYS, find_forbidden_content, scrub_forbidden_keys
 from .token_auth import AUTH_SIGNATURE_FIELD, AUTH_TOKEN_ID_FIELD
 from lionlock.core.models import canonical_gating_decision
 from lionlock.telemetry.store import open_store
@@ -47,27 +47,8 @@ PUBLIC_EVENT_FIELDS = {
     AUTH_SIGNATURE_FIELD,
 }
 
-FORBIDDEN_KEYS = {
-    "assistant_response",
-    "completion",
-    "content",
-    "device_id",
-    "input",
-    "ip",
-    "messages",
-    "output",
-    "payload_b64",
-    "prompt",
-    "prompt_text",
-    "raw_messages",
-    "raw_text",
-    "response",
-    "response_text",
-    "system_prompt",
-    "tool_calls",
-    "user_id",
-    "user_prompt",
-}
+# An alias, not a copy, so this list and privacy.FORBIDDEN_PAYLOAD_KEYS cannot drift apart.
+FORBIDDEN_KEYS = FORBIDDEN_PAYLOAD_KEYS
 
 
 def _is_forbidden_key(key: str) -> bool:
