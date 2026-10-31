@@ -25,9 +25,21 @@ def entry_hash(entry: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_serialize(payload).encode("utf-8")).hexdigest()
 
 
-def verify_chain(entries: Iterable[dict[str, Any]]) -> None:
-    """Validate prev_hash links and hashes for each chain entry."""
+def verify_chain(
+    entries: Iterable[dict[str, Any]],
+    *,
+    expected_head: str | None = None,
+    expected_count: int | None = None,
+) -> None:
+    """Validate prev_hash links and hashes for each chain entry.
+
+    The chain alone detects edited, inserted, reordered and leading-removed entries. Removing the
+    newest entries, or rewriting the whole log, is detected only against a head recorded outside
+    the log: pass it as ``expected_head`` (last ``sha256``) and/or ``expected_count``. A log that
+    has grown since the head was recorded passes as long as the recorded head is still in it.
+    """
     previous_hash = GENESIS_HASH
+    seen_head = expected_head is None or expected_head == GENESIS_HASH
     count = 0
     for count, entry in enumerate(entries, start=1):
         if not isinstance(entry, dict):
@@ -40,10 +52,26 @@ def verify_chain(entries: Iterable[dict[str, Any]]) -> None:
         if current_hash != expected_hash:
             raise TamperDetectedError(f"Entry #{count} hash mismatch")
         previous_hash = current_hash
+        if expected_count is not None and count == expected_count and expected_head is not None:
+            if current_hash != expected_head:
+                raise TamperDetectedError(f"Entry #{count} is not the recorded head")
+        if current_hash == expected_head:
+            seen_head = True
+    if expected_count is not None and count < expected_count:
+        raise TamperDetectedError(
+            f"Log holds {count} entries but {expected_count} were recorded (truncated)"
+        )
+    if not seen_head:
+        raise TamperDetectedError("Recorded head is not in the log (truncated or rewritten)")
 
 
-def verify_chain_file(path: str | Path) -> None:
-    """Load JSONL entries from disk and validate their hash chain."""
+def verify_chain_file(
+    path: str | Path,
+    *,
+    expected_head: str | None = None,
+    expected_count: int | None = None,
+) -> None:
+    """Load JSONL entries from disk and validate their hash chain (see ``verify_chain``)."""
     log_path = Path(path)
     if not log_path.exists():
         raise TamperDetectedError(f"Log file does not exist: {log_path}")
@@ -60,4 +88,4 @@ def verify_chain_file(path: str | Path) -> None:
             if not isinstance(parsed, dict):
                 raise TamperDetectedError(f"Invalid JSON object at line {line_number}")
             entries.append(parsed)
-    verify_chain(entries)
+    verify_chain(entries, expected_head=expected_head, expected_count=expected_count)

@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased — audit fixes
+
+From a full review of `src/` after the move to fully open source. Each fix has a test that fails on
+`1.0.0b2`.
+
+### Fixed
+
+- **The LLM connector could leak its API key.** urllib follows a redirected POST (301/302/303) as
+  a GET that still carries `Authorization`, so one redirect sent the bearer key to whatever host
+  the server named. Redirects are no longer followed, the key is never sent over plain http except
+  to localhost, and only http/https endpoints are called.
+- **A streamed reply could be billed and shown twice.** An empty `choices` chunk (usage or content
+  filter) or a dropped stream fell back to a second, non-streaming request and replayed the whole
+  reply after the partial one. A stream that fails after text was shown now returns
+  `stream_interrupted`.
+- **A `.env` file could switch gating off.** A `.env` found implicitly in the current directory or
+  repo root was copied into the environment in full. It may now only set database connection
+  settings; `load_dotenv(path)` with an explicit path still loads everything.
+- **Database credentials in the environment switched SQL telemetry on** (and crashed startup under
+  the default backend), and the DSN was copied into `logging_sql.token`. The SQL sink is now
+  enabled only by `logging_sql.enabled = true`.
+- **A broken `lionlock.toml` was silently ignored**, dropping token auth, failsafe and custom
+  thresholds back to defaults. It now raises.
+- **`TrustVaultLogger` could fork its chain under concurrent writers**, and a damaged last line
+  silently restarted the chain. Appends are now locked, the head is read from the end of the file,
+  and a damaged last entry stops writes. `head()` plus `verify_chain(expected_head=,
+  expected_count=)` detect truncation and rewrites, which the chain alone cannot.
+- **The Trust Overlay table name was put into SQL unchecked.** It must now be a plain identifier.
+- **Resending the same upload bypassed the receiver's rate limit**, and a full rate table reset
+  every client's budget. Duplicates now count, and only stale buckets are evicted.
+- **`evaluate_policy` ignored configured signal weights** while the logged `config_hash` claimed
+  they applied. It now takes `weights` and `enabled_signals`, and the quickstart passes them.
+- The SQL privacy scrubber now refuses `content`, `completion`, `tool_calls` and the other raw-text
+  keys the event log already refused.
+- Per-event SQL telemetry no longer rebuilds the token verifier (and its database connection) or
+  re-reads `.env` for every event.
+
+### Compatibility
+
+- The database host and port no longer fall back to the generic `HOST` and `PORT` variables; set
+  `LIONLOCK_DB_HOST` / `LIONLOCK_DB_PORT` (or the `LIONLOCK_TELEMETRY_DB_*` forms).
+- Deployments that relied on environment credentials alone to turn on SQL telemetry must set
+  `logging_sql.enabled = true` (and `logging.backend = "sql"` or `"both"`).
+- Settings other than database connection settings must come from the real environment or an
+  explicit `load_dotenv(path)`, not from an implicitly found `.env`.
+- Calling the LLM connector with an API key over plain http to a non-local host now fails with
+  `insecure_endpoint_for_api_key`; use https.
+- A `TrustVaultLogger` file whose last line is damaged must be inspected (and repaired) before new
+  entries can be written.
+
 ## 1.0.0b2 — security and data-preservation fixes
 
 Recommended for everyone on `1.0.0b1`. That release was published before everything below, so an

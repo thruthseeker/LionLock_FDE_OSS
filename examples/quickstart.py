@@ -44,7 +44,15 @@ def run_quickstart(path: str | Path = FIXTURE_PATH) -> dict[str, int]:
         bundle = score_payload(payload)
         if bundle is None:
             continue
-        decision = evaluate_policy(bundle, gating_enabled=gating_enabled)
+        # Apply the same settings that config_hash_from() records with each event.
+        decision = evaluate_policy(
+            bundle,
+            thresholds=config["gating"].get("thresholds"),
+            gating_enabled=gating_enabled,
+            hallucination_mode=config["gating"].get("hallucination_mode", "warn_only"),
+            weights=config["signals"].get("weights"),
+            enabled_signals=config["signals"].get("enabled"),
+        )
 
         if decision.gating_decision in {"REFRESH", "BLOCK"}:
             flagged += 1

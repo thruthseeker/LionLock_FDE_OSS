@@ -12,13 +12,30 @@ _DEFAULT_ADMIN_USER = "lionlock_admin"
 _DEFAULT_WRITER_USER = "lionlock_writer"
 _DEFAULT_PORT = 25060
 
-_ENV_DB_HOST_KEYS = ("LIONLOCK_TELEMETRY_DB_HOST", "LIONLOCK_DB_HOST", "HOST")
-_ENV_DB_PORT_KEYS = ("LIONLOCK_TELEMETRY_DB_PORT", "LIONLOCK_DB_PORT", "PORT")
+# No bare HOST/PORT fallback: platforms set those for the app itself, not for its database.
+_ENV_DB_HOST_KEYS = ("LIONLOCK_TELEMETRY_DB_HOST", "LIONLOCK_DB_HOST")
+_ENV_DB_PORT_KEYS = ("LIONLOCK_TELEMETRY_DB_PORT", "LIONLOCK_DB_PORT")
 _ENV_DB_NAME_KEYS = ("LIONLOCK_TELEMETRY_DB_NAME", "LIONLOCK_DB_NAME")
 _ENV_SSLMODE_KEYS_ADMIN = ("LIONLOCK_SSLMODE",)
 _ENV_SSLMODE_KEYS_TELEMETRY = ("LIONLOCK_TELEMETRY_SSLMODE", "LIONLOCK_SSLMODE")
 _ENV_SSLROOTCERT_KEYS_ADMIN = ("LIONLOCK_SSLROOTCERT",)
 _ENV_SSLROOTCERT_KEYS_TELEMETRY = ("LIONLOCK_TELEMETRY_SSLROOTCERT", "LIONLOCK_SSLROOTCERT")
+
+# A .env found implicitly (current directory or repo root) may only supply database connection
+# settings. Anything else, such as LIONLOCK_GATING_ENABLED or the upload endpoint, would let a
+# file in an untrusted checkout switch gating off or send telemetry elsewhere.
+_IMPLICIT_DOTENV_PREFIXES = (
+    "LIONLOCK_TELEMETRY_DB_",
+    "LIONLOCK_DB_",
+    "LIONLOCK_WRITER_",
+    "LIONLOCK_ADMIN_",
+    "LIONLOCK_SSL",
+    "LIONLOCK_TELEMETRY_SSL",
+    "LIONLOCK_TELEMETRY_TOKEN",
+    "LIONLOCK_SQL_TELEMETRY_TOKEN",
+    "LIONLOCK_SQL_TOKEN",
+    "LIONLOCK_LOG_TOKEN_",
+)
 
 
 def validate_identifier(name: str, label: str) -> None:
@@ -41,7 +58,10 @@ def _env_first(*names: str) -> str | None:
     return None
 
 
-def _read_env_lines(lines: Iterable[str]) -> None:
+_DOTENV_LOADED: set[tuple[str, int, tuple[str, ...] | None]] = set()
+
+
+def _read_env_lines(lines: Iterable[str], allowed_prefixes: tuple[str, ...] | None = None) -> None:
     for line in lines:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
@@ -54,6 +74,8 @@ def _read_env_lines(lines: Iterable[str]) -> None:
         key = key.strip()
         if not key or key in os.environ:
             continue
+        if allowed_prefixes is not None and not key.startswith(allowed_prefixes):
+            continue
         value = value.strip()
         if value and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
@@ -61,10 +83,17 @@ def _read_env_lines(lines: Iterable[str]) -> None:
 
 
 def load_dotenv(path: str | Path | None = None) -> bool:
+    """Load a .env file without overriding variables that are already set.
+
+    An explicit ``path`` is loaded in full. Without one, the first .env in the current directory or
+    the repository root is used, and only database connection settings are taken from it.
+    """
     candidate: Path | None
+    allowed: tuple[str, ...] | None = None
     if path is not None:
         candidate = Path(path)
     else:
+        allowed = _IMPLICIT_DOTENV_PREFIXES
         cwd_env = Path.cwd() / ".env"
         root = _repo_root()
         candidates = [
@@ -78,7 +107,13 @@ def load_dotenv(path: str | Path | None = None) -> bool:
                 break
     if candidate is None or not candidate.is_file():
         return False
-    _read_env_lines(candidate.read_text(encoding="utf-8").splitlines())
+    stamp = (str(candidate.resolve()), candidate.stat().st_mtime_ns, allowed)
+    if stamp in _DOTENV_LOADED:
+        # Loading never overrides a set variable, so re-reading an unchanged file (once per SQL
+        # event before) cannot change anything.
+        return True
+    _read_env_lines(candidate.read_text(encoding="utf-8").splitlines(), allowed)
+    _DOTENV_LOADED.add(stamp)
     return True
 
 

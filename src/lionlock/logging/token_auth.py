@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import secrets
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -245,13 +246,53 @@ def verify_and_prepare_event(
     return verifier.verify_and_prepare(payload)
 
 
+_VERIFIER_CACHE: Dict[str, TokenVerifier] = {}
+_VERIFIER_CACHE_MAX = 16
+_VERIFIER_CACHE_LOCK = threading.Lock()
+
+
+def _verifier_cache_key(cfg: Dict[str, Any]) -> str:
+    path = cfg.get("token_hashes_path")
+    try:
+        stamp = Path(path).stat().st_mtime_ns if isinstance(path, str) and path.strip() else None
+    except OSError:
+        stamp = None
+    return json.dumps(
+        {
+            "cfg": cfg,
+            "hashes_file_mtime": stamp,
+            "env_hashes": os.getenv("LIONLOCK_LOG_TOKEN_HASHES", ""),
+            "env_db_uri": os.getenv("LIONLOCK_LOG_TOKEN_DB_URI", ""),
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _cached_verifier(cfg: Dict[str, Any]) -> TokenVerifier:
+    """One verifier per effective configuration, so its allowlist refresh interval is honoured.
+
+    Building a fresh verifier per event re-read the hash file and, with a token database, opened a
+    new connection for every event.
+    """
+    key = _verifier_cache_key(cfg)
+    with _VERIFIER_CACHE_LOCK:
+        verifier = _VERIFIER_CACHE.get(key)
+        if verifier is None:
+            if len(_VERIFIER_CACHE) >= _VERIFIER_CACHE_MAX:
+                _VERIFIER_CACHE.clear()
+            verifier = build_verifier(cfg)
+            _VERIFIER_CACHE[key] = verifier
+        return verifier
+
+
 def prepare_event_for_sql(
     payload: Dict[str, Any],
     *,
     token_config: Dict[str, Any] | None = None,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     cfg = dict(token_config or {})
-    verifier = build_verifier(cfg)
+    verifier = _cached_verifier(cfg)
     signed_payload = payload
     if verifier.enabled and (
         AUTH_TOKEN_FIELD not in payload

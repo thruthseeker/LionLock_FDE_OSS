@@ -1,5 +1,12 @@
 # Full Repository Audit Report: LionLock FDE OSS
 
+> **Superseded.** This March 2026 report covered an earlier, smaller codebase, and its
+> "approved for production" verdict no longer applies. A full review in October 2026 found and
+> fixed issues it missed (API-key leak via redirects in the LLM connector, `.env` able to switch
+> gating off, an unvalidated Trust Overlay table name, concurrent-writer and truncation gaps in
+> `TrustVaultLogger`). See `CHANGELOG.md`. LionLock is beta software; no production approval is
+> given.
+
 **Audit Date**: 2026-03-14
 **Auditor**: Claude Code (Automated Security & Quality Analysis)
 **Audit Scope**: Full source code review (~9,080 LOC), dependency analysis, threat model coverage, CI/CD tooling
@@ -107,7 +114,7 @@ LionLock_FDE_OSS/
 
 **Minor**:
 - `core/scoring.py:251`: `_ = duration_ms` — intentional unused marker, clearly documented
-- `docs/USAGE.md:5`: Hard-coded path `/home/master/Desktop/...` should use `$HOME` placeholder
+- `docs/USAGE.md:5`: A hard-coded personal path should use a `$HOME` placeholder (since fixed)
 - Some SQL module duplication (events_sql, anomaly_sql, missed_signal_sql share patterns) — acceptable, clear and readable
 
 **None Critical or High**

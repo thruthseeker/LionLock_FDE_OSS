@@ -211,10 +211,11 @@ def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
         try:
             with config_path.open("rb") as handle:
                 raw = tomllib.load(handle)
-        except Exception:
-            raw = None
-        if isinstance(raw, dict):
-            config = _merge_dict(config, raw)
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            # Never fall back to defaults silently: a typo would quietly switch off token auth,
+            # failsafe and custom thresholds while the operator believes they are on.
+            raise ValueError(f"cannot load {config_path}: {exc}") from exc
+        config = _merge_dict(config, raw)
 
     config.setdefault("gating", {})
     config["gating"]["enabled"] = resolve_gating_enabled(config)
@@ -226,21 +227,24 @@ def load_config(path: str = "lionlock.toml") -> Dict[str, Any]:
     ).strip()
     if env_token:
         sql_cfg["token"] = env_token
-    telemetry_db_uri = os.getenv("LIONLOCK_TELEMETRY_DB_URI", "").strip()
-    if not telemetry_db_uri:
-        try:
-            telemetry_db_uri = build_postgres_dsn("writer")
-        except Exception:
-            telemetry_db_uri = ""
-    if telemetry_db_uri:
-        sql_cfg["uri"] = telemetry_db_uri
-        sql_cfg["token"] = telemetry_db_uri
-        sql_cfg["enabled"] = True
+    # The SQL sink is opt-in: the environment may say where the database is, never whether to use
+    # it. Credentials present for some other tool must not switch it on (or crash startup).
+    if sql_cfg.get("enabled"):
+        telemetry_db_uri = os.getenv("LIONLOCK_TELEMETRY_DB_URI", "").strip()
+        if not telemetry_db_uri and not str(sql_cfg.get("uri", "")).strip():
+            try:
+                telemetry_db_uri = build_postgres_dsn("writer")
+            except Exception:
+                telemetry_db_uri = ""
+        if telemetry_db_uri:
+            sql_cfg["uri"] = telemetry_db_uri
     backend = str(logging_cfg.get("backend") or "sqlite").lower()
     if sql_cfg.get("enabled") and backend not in {"sql", "both"}:
         raise RuntimeError("SQL telemetry requires logging.backend to be 'sql' or 'both'.")
-    if sql_cfg.get("enabled") and not str(sql_cfg.get("token", "")).strip():
-        raise RuntimeError("logging_sql.token is required when SQL telemetry is enabled.")
+    if sql_cfg.get("enabled") and not (
+        str(sql_cfg.get("token", "")).strip() or str(sql_cfg.get("uri", "")).strip()
+    ):
+        raise RuntimeError("logging_sql.token or uri is required when SQL telemetry is enabled.")
     if sql_cfg.get("enabled") and logging_cfg.get("content_policy") != "signals_only":
         logging_cfg["content_policy"] = "signals_only"
         warnings.warn(

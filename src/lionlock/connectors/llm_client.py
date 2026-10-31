@@ -3,6 +3,48 @@ import os
 import time
 from typing import Any, Callable, Dict, Tuple
 from urllib import error, request
+from urllib.parse import urlsplit
+
+from lionlock.telemetry.upload import LOOPBACK_HOSTS
+
+
+class _NoRedirect(request.HTTPRedirectHandler):
+    """Never follow redirects: urllib would re-send the Authorization header to the new host."""
+
+    def redirect_request(
+        self,
+        req: request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+def _open(req: request.Request, timeout_s: int) -> Any:
+    handlers: list[request.BaseHandler] = [_NoRedirect()]
+    if (urlsplit(req.full_url).hostname or "").lower() in LOOPBACK_HOSTS:
+        # Loopback traffic is plain http; never relay it (or its key) through a proxy.
+        handlers.append(request.ProxyHandler({}))
+    return request.build_opener(*handlers).open(req, timeout=timeout_s)
+
+
+def _endpoint_problem(base_url: str, sends_key: bool) -> str | None:
+    """Why ``base_url`` must not be called, or ``None`` when it is acceptable."""
+    try:
+        parts = urlsplit(base_url)
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        return "invalid_base_url"
+    if parts.scheme not in {"http", "https"}:
+        return "unsupported_scheme"
+    if not host:
+        return "invalid_base_url"
+    if sends_key and parts.scheme == "http" and host not in LOOPBACK_HOSTS:
+        return "insecure_endpoint_for_api_key"
+    return None
 
 
 def _post_json(
@@ -11,7 +53,7 @@ def _post_json(
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(url, data=data, headers=headers, method="POST")
     try:
-        with request.urlopen(req, timeout=timeout_s) as resp:
+        with _open(req, timeout_s) as resp:
             body = resp.read()
             status = resp.getcode()
     except error.HTTPError as exc:
@@ -61,20 +103,33 @@ def _extract_ollama_content(payload: Dict[str, Any] | None) -> str | None:
     return _extract_openai_content(payload)
 
 
+def _openai_delta_content(parsed: Any) -> str | None:
+    if not isinstance(parsed, dict):
+        return None
+    choices = parsed.get("choices")
+    # Usage and content-filter chunks carry an empty ``choices`` list.
+    if not choices or not isinstance(choices, list) or not isinstance(choices[0], dict):
+        return None
+    delta = choices[0].get("delta")
+    content = delta.get("content") if isinstance(delta, dict) else None
+    return content if isinstance(content, str) else None
+
+
 def _stream_openai(
     url: str,
     payload: Dict[str, Any],
     timeout_s: int,
     headers: Dict[str, str],
     on_chunk: Callable[[str], None] | None,
-) -> Tuple[str | None, Dict[str, Any] | None, str | None]:
+) -> Tuple[str | None, Dict[str, Any] | None, str | None, int]:
+    """Stream a reply. The last value counts chunks already passed to ``on_chunk``."""
     payload = dict(payload)
     payload["stream"] = True
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(url, data=data, headers=headers, method="POST")
     buffer: list[str] = []
     try:
-        with request.urlopen(req, timeout=timeout_s) as resp:
+        with _open(req, timeout_s) as resp:
             for raw in resp:
                 line = raw.decode("utf-8").strip()
                 if not line or not line.startswith("data:"):
@@ -86,15 +141,14 @@ def _stream_openai(
                     parsed = json.loads(item)
                 except Exception:
                     continue
-                delta = parsed.get("choices", [{}])[0].get("delta", {})
-                content = delta.get("content")
-                if isinstance(content, str):
+                content = _openai_delta_content(parsed)
+                if content is not None:
                     buffer.append(content)
                     if on_chunk:
                         on_chunk(content)
-        return "".join(buffer), {"stream": True}, None
+        return "".join(buffer), {"stream": True}, None, len(buffer)
     except Exception as exc:
-        return None, None, f"stream_error: {exc}"
+        return None, None, f"stream_error: {exc}", len(buffer)
 
 
 def _stream_ollama(
@@ -103,14 +157,15 @@ def _stream_ollama(
     timeout_s: int,
     headers: Dict[str, str],
     on_chunk: Callable[[str], None] | None,
-) -> Tuple[str | None, Dict[str, Any] | None, str | None]:
+) -> Tuple[str | None, Dict[str, Any] | None, str | None, int]:
+    """Stream a reply. The last value counts chunks already passed to ``on_chunk``."""
     payload = dict(payload)
     payload["stream"] = True
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(url, data=data, headers=headers, method="POST")
     buffer: list[str] = []
     try:
-        with request.urlopen(req, timeout=timeout_s) as resp:
+        with _open(req, timeout_s) as resp:
             for raw in resp:
                 line = raw.decode("utf-8").strip()
                 if not line:
@@ -118,6 +173,8 @@ def _stream_ollama(
                 try:
                     parsed = json.loads(line)
                 except Exception:
+                    continue
+                if not isinstance(parsed, dict):
                     continue
                 content = None
                 message = parsed.get("message")
@@ -129,11 +186,11 @@ def _stream_ollama(
                     buffer.append(content)
                     if on_chunk:
                         on_chunk(content)
-                if parsed.get("done"):
+                if isinstance(parsed, dict) and parsed.get("done"):
                     break
-        return "".join(buffer), {"stream": True}, None
+        return "".join(buffer), {"stream": True}, None, len(buffer)
     except Exception as exc:
-        return None, None, f"stream_error: {exc}"
+        return None, None, f"stream_error: {exc}", len(buffer)
 
 
 def call_llm(
@@ -157,6 +214,9 @@ def call_llm(
         api_key = os.getenv(api_key_env, "")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+    problem = _endpoint_problem(base, "Authorization" in headers)
+    if problem:
+        return None, None, {"used_api": None, "endpoint": base, "error": problem, "tried": []}
 
     messages = []
     if system_prompt:
@@ -183,13 +243,18 @@ def call_llm(
             error_msg = None
             status = None
             is_http_error = False
+            stream_interrupted = False
             if stream_internal and on_chunk:
-                content, raw_json, error_msg = _stream_openai(
+                content, raw_json, error_msg, emitted = _stream_openai(
                     url, payload, timeout_s, headers, on_chunk
                 )
                 if content is not None and error_msg is None:
                     stream_used = True
-            if content is None:
+                elif emitted:
+                    # Part of the reply already reached on_chunk. A second request would be
+                    # billed again and replay the whole reply after the partial one.
+                    stream_interrupted = True
+            if content is None and not stream_interrupted:
                 status, raw_json, error_msg, is_http_error = _post_json(
                     url, payload, timeout_s, headers
                 )
@@ -206,13 +271,18 @@ def call_llm(
             error_msg = None
             status = None
             is_http_error = False
+            stream_interrupted = False
             if stream_internal and on_chunk:
-                content, raw_json, error_msg = _stream_ollama(
+                content, raw_json, error_msg, emitted = _stream_ollama(
                     url, payload, timeout_s, headers, on_chunk
                 )
                 if content is not None and error_msg is None:
                     stream_used = True
-            if content is None:
+                elif emitted:
+                    # Part of the reply already reached on_chunk. A second request would be
+                    # billed again and replay the whole reply after the partial one.
+                    stream_interrupted = True
+            if content is None and not stream_interrupted:
                 status, raw_json, error_msg, is_http_error = _post_json(
                     url, payload, timeout_s, headers
                 )
@@ -228,6 +298,10 @@ def call_llm(
             "stream_used": stream_used,
         }
         last_meta = meta
+
+        if stream_interrupted:
+            meta["error"] = f"stream_interrupted: {error_msg}"
+            return None, None, meta
 
         if content is not None:
             if stream_internal and on_chunk and buffered_chunk_chars > 0 and not stream_used:

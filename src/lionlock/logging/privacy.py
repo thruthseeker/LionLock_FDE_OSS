@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-FORBIDDEN_PAYLOAD_KEYS = {
+_TEXT_IDENTIFIER_KEYS = {
     "prompt",
     "response",
     "prompt_text",
@@ -14,7 +14,22 @@ FORBIDDEN_PAYLOAD_KEYS = {
     "device_id",
 }
 
-FORBIDDEN_VALUE_TOKENS = FORBIDDEN_PAYLOAD_KEYS | {
+# Key names that carry raw text or identifiers. Kept in step with event_log.FORBIDDEN_KEYS and the
+# anomaly / trust overlay schemas, which already refused content, completion and tool_calls.
+FORBIDDEN_PAYLOAD_KEYS = _TEXT_IDENTIFIER_KEYS | {
+    "assistant_response",
+    "completion",
+    "content",
+    "raw_messages",
+    "raw_text",
+    "system_prompt",
+    "tool_calls",
+    "user_prompt",
+}
+
+# Substrings refused inside values. Deliberately narrower than the key list: "content" here would
+# also reject harmless values such as "content_policy".
+FORBIDDEN_VALUE_TOKENS = _TEXT_IDENTIFIER_KEYS | {
     "assistant_response",
     "raw_messages",
     "raw_text",

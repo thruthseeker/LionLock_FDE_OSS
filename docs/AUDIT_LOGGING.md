@@ -5,7 +5,22 @@
 The canonical tamper-evident audit log in OSS LionLock is `TrustVaultLogger` (`src/lionlock/logger.py`).
 Each entry includes `prev_hash` and `sha256` so records are chained in append order.
 
-Use `TrustVaultLogger.verify_chain()` to validate the on-disk chain and detect tampering or truncation.
+Use `TrustVaultLogger.verify_chain()` to validate the on-disk chain. It detects entries that were
+edited, inserted, reordered or removed from the start or middle. Appends are serialized across
+threads and, on POSIX, across processes; a damaged last entry (for example from a crash mid-write)
+stops further writes instead of silently starting a new chain.
+
+A self-contained hash chain cannot detect that its newest entries were removed, or that the whole
+log was rewritten with freshly computed hashes. To detect those, record `TrustVaultLogger.head()`
+(entry count and last hash) somewhere the log's writer cannot change, and later pass it back:
+
+```python
+count, head = logger.head()  # store these elsewhere
+logger.verify_chain(expected_head=head, expected_count=count)
+```
+
+A log that has grown since the head was recorded still verifies, as long as the recorded head is
+still in it.
 
 ## Public telemetry stream
 
@@ -122,7 +137,9 @@ Optional keys, accepted by both `[logging_sql]` and `[trust_overlay.sql]`:
 
 ## Verification coverage
 
-Tamper and truncation checks are covered by `tests/test_logger.py`.
+Tamper and truncation checks are covered by `tests/test_logger.py` and
+`tests/test_logger_integrity.py` (concurrent writers, damaged last entry, truncation and rewrite
+against a recorded head).
 
 SQL sink delivery guarantees are covered by `tests/test_sql_writer_reliability.py` (both sinks,
 via sqlite3 and, when installed, SQLAlchemy), `tests/test_public_telemetry_persistence.py` and
