@@ -58,6 +58,9 @@ def _env_first(*names: str) -> str | None:
     return None
 
 
+_DOTENV_LOADED: set[tuple[str, int, tuple[str, ...] | None]] = set()
+
+
 def _read_env_lines(lines: Iterable[str], allowed_prefixes: tuple[str, ...] | None = None) -> None:
     for line in lines:
         stripped = line.strip()
@@ -104,7 +107,13 @@ def load_dotenv(path: str | Path | None = None) -> bool:
                 break
     if candidate is None or not candidate.is_file():
         return False
+    stamp = (str(candidate.resolve()), candidate.stat().st_mtime_ns, allowed)
+    if stamp in _DOTENV_LOADED:
+        # Loading never overrides a set variable, so re-reading an unchanged file (once per SQL
+        # event before) cannot change anything.
+        return True
     _read_env_lines(candidate.read_text(encoding="utf-8").splitlines(), allowed)
+    _DOTENV_LOADED.add(stamp)
     return True
 
 
