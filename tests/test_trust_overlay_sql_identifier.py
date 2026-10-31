@@ -13,9 +13,7 @@ HOSTILE = "t (x int); DROP TABLE lionlock_signals; --"
 
 def test_init_db_refuses_a_table_name_that_is_not_an_identifier(tmp_path: Path) -> None:
     db = tmp_path / "overlay.db"
-    ok, message = sql_sink.init_db(
-        {"backend": "sqlite3", "sqlite_path": str(db), "table": HOSTILE}
-    )
+    ok, message = sql_sink.init_db({"backend": "sqlite3", "sqlite_path": str(db), "table": HOSTILE})
     assert ok is False
     assert "Invalid SQL identifier" in message
 

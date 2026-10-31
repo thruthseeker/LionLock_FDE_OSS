@@ -15,7 +15,7 @@ log was rewritten with freshly computed hashes. To detect those, record `TrustVa
 (entry count and last hash) somewhere the log's writer cannot change, and later pass it back:
 
 ```python
-count, head = logger.head()          # store these elsewhere
+count, head = logger.head()  # store these elsewhere
 logger.verify_chain(expected_head=head, expected_count=count)
 ```
 

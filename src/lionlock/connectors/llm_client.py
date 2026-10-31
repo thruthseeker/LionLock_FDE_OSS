@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, Tuple
 from urllib import error, request
 from urllib.parse import urlsplit
 
-LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+from lionlock.telemetry.upload import LOOPBACK_HOSTS
 
 
 class _NoRedirect(request.HTTPRedirectHandler):

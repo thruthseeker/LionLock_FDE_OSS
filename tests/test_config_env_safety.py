@@ -81,7 +81,7 @@ def test_database_credentials_alone_do_not_enable_sql_telemetry(
 ) -> None:
     monkeypatch.setenv("LIONLOCK_WRITER_PASSWORD", "pw")
     monkeypatch.setenv("LIONLOCK_DB_HOST", "db.internal")
-    monkeypatch.setenv("LIONLOCK_TELEMETRY_DB_URI", "postgresql://u:pw@db.internal/x")
+    monkeypatch.setenv("LIONLOCK_TELEMETRY_DB_URI", "postgresql://u:pw@dbhost:5432/x")
     config = lionlock_config.load_config("missing.toml")
     sql_cfg = config["logging_sql"]
     assert sql_cfg["enabled"] is False
@@ -92,13 +92,13 @@ def test_database_credentials_alone_do_not_enable_sql_telemetry(
 def test_explicit_opt_in_takes_the_uri_from_the_environment_without_copying_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("LIONLOCK_TELEMETRY_DB_URI", "postgresql://u:pw@db.internal/x")
+    monkeypatch.setenv("LIONLOCK_TELEMETRY_DB_URI", "postgresql://u:pw@dbhost:5432/x")
     toml = tmp_path / "lionlock.toml"
     toml.write_text('[logging]\nbackend = "both"\n\n[logging_sql]\nenabled = true\n')
     config = lionlock_config.load_config(str(toml))
     sql_cfg = config["logging_sql"]
     assert sql_cfg["enabled"] is True
-    assert sql_cfg["uri"] == "postgresql://u:pw@db.internal/x"
+    assert sql_cfg["uri"] == "postgresql://u:pw@dbhost:5432/x"
     assert sql_cfg["token"] == ""
 
 

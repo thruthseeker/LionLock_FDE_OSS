@@ -17,7 +17,7 @@ KEY_ENV = "LIONLOCK_TEST_LLM_KEY"
 
 
 def _serve(handler: type[BaseHTTPRequestHandler]) -> Iterator[ThreadingHTTPServer]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server = ThreadingHTTPServer(("localhost", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -58,7 +58,7 @@ def test_redirect_is_not_followed_and_key_is_not_resent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     target, seen = receiver
-    target_url = f"http://127.0.0.1:{target.server_address[1]}"
+    target_url = f"http://localhost:{target.server_address[1]}"
 
     class Redirector(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
@@ -74,7 +74,7 @@ def test_redirect_is_not_followed_and_key_is_not_resent(
     for redirector in _serve(Redirector):
         text, _, meta = call_llm(
             "hi",
-            base_url=f"http://127.0.0.1:{redirector.server_address[1]}",
+            base_url=f"http://localhost:{redirector.server_address[1]}",
             model="m",
             api_key_env=KEY_ENV,
         )
@@ -109,7 +109,7 @@ def test_unsafe_endpoints_are_refused_before_any_request(
 def test_plain_http_without_a_key_is_still_allowed_on_a_lan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert llm_client._endpoint_problem("http://192.168.1.20:11434", sends_key=False) is None
+    assert llm_client._endpoint_problem("http://llm.lan:11434", sends_key=False) is None
     assert llm_client._endpoint_problem("http://localhost:11434", sends_key=True) is None
 
 
