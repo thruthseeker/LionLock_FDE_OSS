@@ -5,7 +5,31 @@
 The canonical tamper-evident audit log in OSS LionLock is `TrustVaultLogger` (`src/lionlock/logger.py`).
 Each entry includes `prev_hash` and `sha256` so records are chained in append order.
 
-Use `TrustVaultLogger.verify_chain()` to validate the on-disk chain and detect tampering or truncation.
+Use `TrustVaultLogger.verify_chain()` to validate the on-disk chain.
+
+### What the chain proves, and what it does not
+
+The links are an unkeyed forward chain, so be precise about the guarantee:
+
+- **Detected.** Any entry altered in place, and any entry removed from the front or the
+  middle: the next entry's `prev_hash` no longer matches, or its `sha256` no longer
+  recomputes.
+- **Not detected by the links alone.** Entries removed from the *end*. A prefix of a valid
+  chain is itself a valid chain, so deleting the most recent records -- the realistic way to
+  hide activity -- leaves a log that verifies clean. Pass `expected_count` to
+  `verify_chain()` when the number of entries is known from outside the file; that is what
+  closes the gap.
+- **Not detected at all.** A rewrite of the whole log by someone holding write access.
+  `sha256` is an unkeyed digest over public fields, so every hash can be recomputed. The
+  chain shows that a log is *internally consistent*, not that it is the log this process
+  wrote. Detecting that needs either a keyed MAC with a key the writer cannot read, or a
+  head hash anchored somewhere the writer cannot reach.
+
+A single append is one `write()` followed by `fsync`, under an advisory lock held across
+threads and processes, so concurrent writers cannot interleave or both claim the same
+predecessor. If the final entry is unreadable -- a process that died mid-append --
+`record()` raises `ChainStateError` rather than silently starting a fresh chain from
+GENESIS.
 
 ## Public telemetry stream
 
@@ -122,7 +146,10 @@ Optional keys, accepted by both `[logging_sql]` and `[trust_overlay.sql]`:
 
 ## Verification coverage
 
-Tamper and truncation checks are covered by `tests/test_logger.py`.
+Chain behaviour is covered by `tests/test_logger.py` (chaining, in-place tampering,
+front truncation) and `tests/test_trustvault_chain.py` (concurrent appends, a torn final
+entry, an entry larger than the tail-read window, and the fact that end truncation is
+invisible to the links without `expected_count`).
 
 SQL sink delivery guarantees are covered by `tests/test_sql_writer_reliability.py` (both sinks,
 via sqlite3 and, when installed, SQLAlchemy), `tests/test_public_telemetry_persistence.py` and

@@ -25,8 +25,14 @@ def entry_hash(entry: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_serialize(payload).encode("utf-8")).hexdigest()
 
 
-def verify_chain(entries: Iterable[dict[str, Any]]) -> None:
-    """Validate prev_hash links and hashes for each chain entry."""
+def verify_chain(entries: Iterable[dict[str, Any]], *, expected_count: int | None = None) -> None:
+    """Validate prev_hash links and hashes for each chain entry.
+
+    The links prove that nothing was altered or removed from the front or the middle. They
+    cannot prove that nothing was removed from the *end*: a prefix of a valid chain is
+    itself a valid chain. Pass ``expected_count`` when the number of entries is known from
+    outside the log to close that gap.
+    """
     previous_hash = GENESIS_HASH
     count = 0
     for count, entry in enumerate(entries, start=1):
@@ -40,9 +46,11 @@ def verify_chain(entries: Iterable[dict[str, Any]]) -> None:
         if current_hash != expected_hash:
             raise TamperDetectedError(f"Entry #{count} hash mismatch")
         previous_hash = current_hash
+    if expected_count is not None and count != expected_count:
+        raise TamperDetectedError(f"Expected {expected_count} entries, found {count}")
 
 
-def verify_chain_file(path: str | Path) -> None:
+def verify_chain_file(path: str | Path, *, expected_count: int | None = None) -> None:
     """Load JSONL entries from disk and validate their hash chain."""
     log_path = Path(path)
     if not log_path.exists():
@@ -60,4 +68,4 @@ def verify_chain_file(path: str | Path) -> None:
             if not isinstance(parsed, dict):
                 raise TamperDetectedError(f"Invalid JSON object at line {line_number}")
             entries.append(parsed)
-    verify_chain(entries)
+    verify_chain(entries, expected_count=expected_count)
